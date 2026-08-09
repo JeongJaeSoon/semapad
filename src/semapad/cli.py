@@ -47,6 +47,8 @@ class Paths:
     home: Path
     state_dir: Path
     config_path: Path
+    runtime_dir: Path
+    snapshot_path: Path
     claude_settings: Path
     sessions_dir: Path
     mapping_dir: Path
@@ -60,6 +62,8 @@ class Paths:
             home=home,
             state_dir=home / "state",
             config_path=home / "config.json",
+            runtime_dir=home / "runtime",
+            snapshot_path=home / "runtime" / "snapshot.json",
             claude_settings=Path(source.get(
                 "SEMAPAD_CLAUDE_SETTINGS",
                 str(user_home / ".claude" / "settings.json"))),
@@ -222,13 +226,50 @@ def _cmd_hook(paths: Paths) -> int:
     return hooks.run(sys.stdin, paths.state_dir)
 
 
+def _cmd_daemon(paths: Paths) -> int:
+    import signal
+    import time
+
+    from semapad import config as config_mod
+    from semapad.daemon import Daemon
+
+    cfg, warnings = config_mod.load(paths.config_path)
+    for warning in warnings:
+        print(f"semapad: config: {warning}", file=sys.stderr)
+    daemon = Daemon(cfg, state_dir=paths.state_dir,
+                    mapping_dir=paths.mapping_dir,
+                    sessions_dir=paths.sessions_dir,
+                    config_path=paths.config_path,
+                    snapshot_path=paths.snapshot_path)
+    stop = {"flag": False}
+
+    def _terminate(_signum, _frame) -> None:
+        stop["flag"] = True
+
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)
+    print("semapad daemon: running (Ctrl-C to stop)")
+    try:
+        while not stop["flag"]:
+            now = time.time()
+            daemon.tick(now)
+            # A verified pad already blocked inside poll_received for poll_ms;
+            # only sleep when the tick had no pad to wait on.
+            if daemon.verified_layer is None:
+                time.sleep(daemon.cfg.poll_ms / 1000.0)
+    finally:
+        daemon.close()
+    return 0
+
+
 def _cmd_ui(paths: Paths, port: int, open_browser: bool) -> int:
     from semapad.web.server import Dashboard, make_server
 
     dashboard = Dashboard(state_dir=paths.state_dir,
                           mapping_dir=paths.mapping_dir,
                           sessions_dir=paths.sessions_dir,
-                          config_path=paths.config_path)
+                          config_path=paths.config_path,
+                          daemon_snapshot_path=paths.snapshot_path)
     server = make_server(dashboard, port)
     url = f"http://127.0.0.1:{port}"
     print(f"semapad ui: {url}")
@@ -252,11 +293,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("hook", help="consume one Claude hook event from stdin")
     sub.add_parser("install-hooks",
                    help="install Claude hooks, claiming old paneglow entries")
+    sub.add_parser("daemon", help="run the pad daemon in the foreground")
 
     args = parser.parse_args(argv)
     paths = Paths.from_env()
     if args.command == "hook":
         return _cmd_hook(paths)
+    if args.command == "daemon":
+        return _cmd_daemon(paths)
     if args.command == "install-hooks":
         return install_hooks(paths, sys.stdout, sys.stderr)
     if args.command == "ui":

@@ -176,3 +176,36 @@ def test_config_endpoints_with_csrf(tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_fresh_daemon_snapshot_wins_over_local_compute(tmp_path: Path):
+    snapshot_path = tmp_path / "runtime" / "snapshot.json"
+    snapshot_path.parent.mkdir(parents=True)
+    daemon_snap = {
+        "schema": 1, "generated_at": 1_700_000_058.0,
+        "config_fingerprint": "feedbeefcafe0000",
+        "alert": "normal", "palette": {"idle": 1}, "diagnostics": [],
+        "slots": [], "conversations": [],
+        "device": {"connected": True, "layer": 1},
+        "frontmost": {"bundle_id": "x", "owner": "claude", "error": None},
+        "processes": {"count": 0, "authoritative": True, "diagnostics": []},
+        "config": {"path": "", "warnings": []},
+    }
+    snapshot_path.write_text(json.dumps(daemon_snap))
+    dash = Dashboard(
+        state_dir=tmp_path / "state", mapping_dir=tmp_path / "mapping",
+        sessions_dir=tmp_path / "sessions", config_path=tmp_path / "config.json",
+        daemon_snapshot_path=snapshot_path,
+        frontmost_reader=lambda: None, clock=lambda: 1_700_000_060.0)
+    data = dash.data()
+    assert data["source"] == "daemon"
+    assert data["device"]["connected"] is True
+    # fingerprint mismatch (no config on disk -> "absent") -> pending banner
+    assert data["config_pending"] is True
+
+    # stale snapshot -> ui computes for itself
+    daemon_snap["generated_at"] = 1_700_000_010.0
+    snapshot_path.write_text(json.dumps(daemon_snap))
+    data = dash.data()
+    assert data["source"] == "ui"
+    assert data["device"]["connected"] is False

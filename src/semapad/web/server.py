@@ -30,14 +30,19 @@ def _default_frontmost() -> str | None:
 class Dashboard:
     """Computes one /data payload per poll; keeps slot assignment across polls."""
 
+    #: A daemon snapshot older than this is stale and the ui computes its own.
+    DAEMON_SNAPSHOT_FRESH_SECONDS = 5.0
+
     def __init__(self, *, state_dir: Path, mapping_dir: Path,
                  sessions_dir: Path, config_path: Path,
+                 daemon_snapshot_path: Path | None = None,
                  frontmost_reader: Callable[[], str | None] = _default_frontmost,
                  clock: Callable[[], float] = time.time) -> None:
         self._state_dir = state_dir
         self._mapping_dir = mapping_dir
         self._sessions_dir = sessions_dir
         self._config_path = config_path
+        self._daemon_snapshot_path = daemon_snapshot_path
         self._frontmost = frontmost_reader
         self._clock = clock
         self._prev: tuple[str | None, ...] | None = None
@@ -64,8 +69,35 @@ class Dashboard:
             owner = "codex"
         return {"bundle_id": bundle, "owner": owner, "error": None}
 
+    def _daemon_snapshot(self, now: float) -> dict | None:
+        """A fresh daemon snapshot wins: the ui must draw what the daemon lit
+        (#57, P11). Stale or absent -> the ui computes for itself (Phase 1-2)."""
+        path = self._daemon_snapshot_path
+        if path is None:
+            return None
+        try:
+            snap = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(snap, dict) or snap.get("schema") != view.SNAPSHOT_SCHEMA:
+            return None
+        generated_at = snap.get("generated_at")
+        if not isinstance(generated_at, (int, float)) \
+                or now - generated_at > self.DAEMON_SNAPSHOT_FRESH_SECONDS:
+            return None
+        return snap
+
     def data(self) -> dict:
         now = self._clock()
+        from_daemon = self._daemon_snapshot(now)
+        if from_daemon is not None:
+            from_daemon["source"] = "daemon"
+            from_daemon["poll_ms"] = _POLL_MS
+            # §5.1 banner: a fingerprint differing from the on-disk config
+            # means the last save has not reached the daemon's tick yet.
+            from_daemon["config_pending"] = (
+                from_daemon.get("config_fingerprint") != self._config_fingerprint())
+            return from_daemon
         cfg, warnings = config_mod.load(self._config_path)
         convs, conv_diags = conversations.scan(self._mapping_dir)
         proc_snapshot = processes.scan(self._sessions_dir)
@@ -103,6 +135,8 @@ class Dashboard:
             "warnings": warnings,
         }
         snap["poll_ms"] = _POLL_MS
+        snap["source"] = "ui"
+        snap["config_pending"] = False
         return snap
 
 
@@ -176,8 +210,20 @@ function ago(sec){ if(!sec) return '-'; const d=Date.now()/1000-sec;
   if(d<86400) return Math.round(d/3600)+'h 전'; return Math.round(d/86400)+'d 전'; }
 
 function render(d){
+  const dev = d.device;
+  const devLine = dev.note ? esc(dev.note) :
+    `패드 ${dev.connected ? '연결됨' : '연결 안 됨'}` +
+    (dev.transport ? ` · ${esc(dev.transport)}` : '') +
+    (dev.firmware ? ` · fw ${esc(dev.firmware)}` : '') +
+    (dev.layer !== null && dev.layer !== undefined ? ` · layer ${dev.layer}` : '') +
+    (dev.status_verified ? ' · status <span class="ok">OK</span>'
+                         : ' · status <span class="warn">미검증</span>') +
+    (dev.pad_error_code ? ` · <span class="err">${esc(dev.pad_error_code)}</span>` : '') +
+    (dev.last_input_result ? ` · 마지막 입력: ${esc(dev.last_input_result)}` : '');
   document.getElementById('device').innerHTML =
-    `<p>${esc(d.device.note)}</p>
+    `<p>[${d.source === 'daemon' ? '데몬 스냅샷' : 'ui 자체 계산'}]` +
+    (d.config_pending ? ' <span class="warn">설정 저장됨 — 데몬 반영 대기 중</span>' : '') +
+    `</p><p>${devLine}</p>
      <p>frontmost: <code>${esc(d.frontmost.bundle_id ?? 'n/a')}</code>` +
     (d.frontmost.owner ? ` → 소유권 <b>${esc(d.frontmost.owner)}</b>` : ' (소유권 규칙 불일치)') +
     (d.frontmost.error ? ` <span class="err">${esc(d.frontmost.error)}</span>` : '') +

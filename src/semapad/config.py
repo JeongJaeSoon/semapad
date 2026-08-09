@@ -31,6 +31,10 @@ class Config:
     underglow_scope: str = "outside"
     reclaim_delay_ms: int = 200
     layer_underglow: str = "keep"
+    #: §11.4: "off" suppresses the unconditional 5 s key rewrite while nothing
+    #: changed, letting the vendor auto-dim reach sleep. Default stays "on"
+    #: (#60 P2 defence) until the §8 P13 experiment says otherwise.
+    idle_rewrite: str = "on"
     ttl_minutes: int = 30
     working_max_seconds: int = 900
     poll_ms: int = 250
@@ -169,6 +173,8 @@ def load(path: Path | None) -> tuple[Config, list[str]]:
                               "underglow.reclaim_delay_ms", warnings, minimum=0),
         layer_underglow=_pick(layer.get("underglow"), _LAYER_UNDERGLOW, "keep",
                               "layer_gate.underglow", warnings),
+        idle_rewrite=_pick(timing.get("idle_rewrite"), {"on", "off"}, "on",
+                           "timing.idle_rewrite", warnings),
         ttl_minutes=_int(state, "ttl_minutes", 30, "state.ttl_minutes",
                          warnings, minimum=1),
         working_max_seconds=_int(state, "working_max_seconds", 900,
