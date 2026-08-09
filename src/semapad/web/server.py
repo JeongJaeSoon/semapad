@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,7 @@ from pathlib import Path
 from semapad import config as config_mod
 from semapad import frontmost, view
 from semapad.sources import conversations, hooks, processes
+from semapad.web import edit
 
 DEFAULT_PORT = 8642
 _POLL_MS = 1500
@@ -39,6 +41,10 @@ class Dashboard:
         self._frontmost = frontmost_reader
         self._clock = clock
         self._prev: tuple[str | None, ...] | None = None
+
+    @property
+    def config_path(self) -> Path:
+        return self._config_path
 
     def _config_fingerprint(self) -> str:
         try:
@@ -145,6 +151,15 @@ ul { padding-left: 1.1rem; }
 <ul class="legend" id="legend"></ul>
 <div id="diags"></div>
 
+<h2>E. 설정</h2>
+<form id="cfg" onsubmit="return saveConfig(event)">
+<table id="cfgrows"></table>
+<button type="submit">저장</button> <span id="cfgmsg"></span>
+</form>
+
+<script>
+const TOKEN = "%TOKEN%";
+</script>
 <script>
 const HEX = c => c === null ? null : '#' + c.toString(16).padStart(6, '0');
 const NAMES = {idle:'Idle', working:'Working', waiting:'Requires input',
@@ -196,9 +211,12 @@ function render(d){
     ? '키에 오르지 못한 대화가 입력/오류 대기 중 (Phase 3: 테두리 blink)'
     : '숨은 알림 없음';
 
+  // legend colour cells copy their config snippet on click (spec §6 step B)
   document.getElementById('legend').innerHTML =
     Object.entries(d.palette).map(([s, c]) =>
-      `<li>${sw(HEX(c))}${NAMES[s]??s} – ${esc(s)}</li>`).join('') +
+      `<li style="cursor:pointer" title="클릭: config 조각 복사"
+           onclick='copySnippet("${s}", "${HEX(c)}")'>
+       ${sw(HEX(c))}${NAMES[s]??s} – ${esc(s)}</li>`).join('') +
     `<li><span class="sw" style="background:#000"></span>Off – 세션 없음</li>`;
 
   const issues = [...(d.diagnostics||[]), ...(d.config.warnings||[]),
@@ -206,6 +224,61 @@ function render(d){
   document.getElementById('diags').innerHTML = issues.length
     ? '<ul>' + issues.map(w => `<li class="warn">${esc(w)}</li>`).join('') + '</ul>'
     : '<p class="ok">경고 없음</p>';
+}
+
+function copySnippet(state, hex){
+  navigator.clipboard.writeText(
+    JSON.stringify({colors: {[state]: hex}}, null, 2));
+}
+
+function fieldInput(f){
+  const id = 'f_' + f.path.replaceAll('.', '_');
+  if (f.kind === 'color')
+    return `<input type="color" id="${id}" value="${f.value}">`;
+  if (f.kind === 'enum')
+    return `<select id="${id}">` + f.options.map(o =>
+      `<option ${o===f.value?'selected':''}>${o}</option>`).join('') + `</select>`;
+  if (f.kind === 'int')
+    return `<input type="number" min="0" id="${id}" value="${f.value}">`;
+  return `<input type="text" id="${id}" value="${esc(f.value.join(', '))}"
+          size="40" placeholder="쉼표로 구분">`;   // strings
+}
+
+let CFG_FIELDS = [];
+async function loadConfig(){
+  const r = await fetch('/config');
+  CFG_FIELDS = (await r.json()).fields;
+  document.getElementById('cfgrows').innerHTML = CFG_FIELDS.map(f =>
+    `<tr><td><code>${f.path}</code></td><td>${fieldInput(f)}</td>
+     <td class="err" id="e_${f.path.replaceAll('.', '_')}"></td></tr>`).join('');
+}
+
+async function saveConfig(ev){
+  ev.preventDefault();
+  const edits = {};
+  for (const f of CFG_FIELDS){
+    const el = document.getElementById('f_' + f.path.replaceAll('.', '_'));
+    let v = el.value;
+    if (f.kind === 'int') v = parseInt(v, 10);
+    if (f.kind === 'strings')
+      v = v.split(',').map(s => s.trim()).filter(Boolean);
+    edits[f.path] = v;
+  }
+  document.querySelectorAll('[id^="e_"]').forEach(e => e.textContent = '');
+  const msg = document.getElementById('cfgmsg');
+  const r = await fetch('/config', {method: 'POST',
+    headers: {'X-Semapad-Token': TOKEN, 'Content-Type': 'application/json'},
+    body: JSON.stringify(edits)});
+  if (r.ok){ msg.textContent = '저장됨 — 다음 폴링에 반영'; msg.className = 'ok'; }
+  else {
+    const body = await r.json();
+    msg.textContent = '저장 실패'; msg.className = 'err';
+    for (const [path, error] of Object.entries(body.errors || {})){
+      const cell = document.getElementById('e_' + path.replaceAll('.', '_'));
+      if (cell) cell.textContent = error;
+    }
+  }
+  return false;
 }
 
 async function tick(){
@@ -217,22 +290,56 @@ async function tick(){
   }
 }
 tick(); setInterval(tick, %POLL%);
+loadConfig();
 </script></body></html>
 """.replace("%POLL%", str(_POLL_MS))
 
 
 class _Handler(BaseHTTPRequestHandler):
-    dashboard: Dashboard   # injected by serve()
+    dashboard: Dashboard   # injected by make_server()
+    csrf_token: str        # injected by make_server()
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         if self.path == "/":
-            body = _PAGE.encode()
+            body = _PAGE.replace("%TOKEN%", self.csrf_token).encode()
             self._reply(200, "text/html; charset=utf-8", body)
         elif self.path == "/data":
             body = json.dumps(self.dashboard.data()).encode()
             self._reply(200, "application/json", body)
+        elif self.path == "/config":
+            cfg, _warnings = config_mod.load(self.dashboard.config_path)
+            body = json.dumps({"fields": edit.schema(cfg)}).encode()
+            self._reply(200, "application/json", body)
         else:
             self._reply(404, "text/plain", b"not found")
+
+    def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
+        if self.path != "/config":
+            self._reply(404, "text/plain", b"not found")
+            return
+        # CSRF gate: the token only ever appears in the same-origin page, and
+        # cross-site requests cannot attach this custom header (spec §6).
+        if self.headers.get("X-Semapad-Token") != self.csrf_token:
+            self._reply(403, "application/json",
+                        json.dumps({"error": "bad token"}).encode())
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            edits = json.loads(self.rfile.read(min(length, 1 << 20)))
+            if not isinstance(edits, dict):
+                raise ValueError("body must be an object")
+        except (ValueError, OSError):
+            self._reply(400, "application/json",
+                        json.dumps({"error": "malformed body"}).encode())
+            return
+        errors = edit.apply_edits(self.dashboard.config_path, edits)
+        if errors:
+            self._reply(400, "application/json",
+                        json.dumps({"errors": errors}).encode())
+        else:
+            # Applies immediately (spec §11.3): every /data poll reloads the
+            # config, so the next tick renders with the saved values.
+            self._reply(200, "application/json", b'{"ok": true}')
 
     def _reply(self, code: int, ctype: str, body: bytes) -> None:
         self.send_response(code)
@@ -246,5 +353,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(dashboard: Dashboard, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (_Handler,), {"dashboard": dashboard})
+    handler = type("BoundHandler", (_Handler,), {
+        "dashboard": dashboard,
+        "csrf_token": secrets.token_hex(16),
+    })
     return ThreadingHTTPServer(("127.0.0.1", port), handler)

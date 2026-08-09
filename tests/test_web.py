@@ -118,3 +118,61 @@ def test_http_endpoints(tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_config_endpoints_with_csrf(tmp_path: Path):
+    dash = _dashboard(tmp_path, clock=lambda: 1_700_000_060.0)
+    server = make_server(dash, port=0)
+    port = server.server_address[1]
+    token = server.RequestHandlerClass.csrf_token
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        # page embeds the token
+        with urllib.request.urlopen(f"{base}/") as response:
+            assert token in response.read().decode()
+        # schema endpoint
+        with urllib.request.urlopen(f"{base}/config") as response:
+            fields = json.loads(response.read())["fields"]
+            assert any(f["path"] == "colors.idle" for f in fields)
+        # POST without token -> 403, file untouched
+        request = urllib.request.Request(
+            f"{base}/config", method="POST",
+            data=json.dumps({"colors.idle": "#101010"}).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(request)
+            raise AssertionError("expected 403")
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
+        assert not (tmp_path / "config.json").exists()
+        # POST with token -> saved, next /data uses the new colour immediately
+        request = urllib.request.Request(
+            f"{base}/config", method="POST",
+            data=json.dumps({"colors.idle": "#101010"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-Semapad-Token": token})
+        with urllib.request.urlopen(request) as response:
+            assert json.loads(response.read()) == {"ok": True}
+        _conversation(tmp_path / "mapping", str(uuid.uuid4()))
+        with urllib.request.urlopen(f"{base}/data") as response:
+            data = json.loads(response.read())
+            assert data["palette"]["idle"] == 0x101010
+            assert data["slots"][0]["color"] == 0x101010
+        # invalid value -> 400 with inline error, file keeps old value
+        request = urllib.request.Request(
+            f"{base}/config", method="POST",
+            data=json.dumps({"colors.idle": "nope"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-Semapad-Token": token})
+        try:
+            urllib.request.urlopen(request)
+            raise AssertionError("expected 400")
+        except urllib.error.HTTPError as error:
+            assert error.code == 400
+            assert "colors.idle" in json.loads(error.read())["errors"]
+        assert json.loads((tmp_path / "config.json").read_text())["colors"]["idle"] == "#101010"
+    finally:
+        server.shutdown()
+        server.server_close()
