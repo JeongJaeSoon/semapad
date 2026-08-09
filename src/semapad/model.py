@@ -1,6 +1,7 @@
 """State vocabulary and priority. Knows nothing about hardware or files."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
@@ -38,3 +39,34 @@ PALETTE: dict[AgentState, int] = {
     AgentState.DONE: 0x00FF4C,
     AgentState.ERROR: 0xFF0033,
 }
+
+
+#: Zone ownership vocabulary (spec §7). Plain strings on purpose -- these cross
+#: process boundaries in snapshots and config.
+OWNERS = frozenset({"none", "claude", "codex"})
+
+
+class Zone(str, Enum):
+    """The two writable surfaces of the pad semapad may own."""
+
+    KEYS = "keys"          # A-zone agent keys
+    AMBIENT = "ambient"    # border underglow
+
+
+@dataclass(frozen=True)
+class Light:
+    """One desired light: unified for keys and border (spec §7).
+
+    ``effect`` is a protocol effect name; ``off`` turns the light off and the
+    colour is then meaningless.
+    """
+
+    colour: int | None
+    effect: str = "solid"
+
+    @property
+    def off(self) -> bool:
+        return self.effect == "off" or self.colour is None
+
+
+LIGHT_OFF = Light(None, "off")
