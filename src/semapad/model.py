@@ -27,3 +27,14 @@ def highest(states: Iterable[AgentState]) -> AgentState | None:
     """The state to surface first. None when there is nothing."""
     ranked = sorted(states, key=lambda s: PRIORITY[s], reverse=True)
     return ranked[0] if ranked else None
+
+
+#: Factory colours, overridable per state through ``colors`` in the config.
+#: Matching what the vendor uses for Codex keeps the eye honest.
+PALETTE: dict[AgentState, int] = {
+    AgentState.IDLE: 0xFFFFFF,
+    AgentState.WORKING: 0x304FFE,
+    AgentState.WAITING: 0xFF6D00,
+    AgentState.DONE: 0x00FF4C,
+    AgentState.ERROR: 0xFF0033,
+}
