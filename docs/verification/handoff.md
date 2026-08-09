@@ -59,12 +59,12 @@ daemon in the foreground until §9.1 passes, then ask for the agent.
 - [ ] no-flash: Claude 전면에서 A키 연타에도 Codex 창 노출 없음
 - [ ] 지연: 상태 변화 → LED 500ms, 키 press → 세션 열림 150ms
 
-## Open spec questions (flagged, not silently resolved)
+## Open questions
 
-1. **daemon.py 463 lines vs §7's 300-line target** — the pad connection
-   lifecycle lives in daemon.py because the alternatives were modifying
-   unmodified-ported `pad.py` or adding a file beyond the §7 structure.
-   Options: raise the target, allow a `padlink.py`, or fold into `pad.py`.
+1. ~~daemon.py 463 lines vs §7's 300-line target~~ → **resolved 2026-08-10**:
+   supervision accepted the deviation after verifying the substance (zero
+   colour/effect literals in daemon, writes decided only in the compositor).
+   SoT §7 now states the substantive criteria; the 300-line proxy is retired.
 2. **Single-tap delay**: vendor-style taps mean a single tap acts only after
    the 350 ms double-tap window. If that feels laggy in practice, the window
    is one constant (`input.DOUBLE_TAP_SECONDS`).
