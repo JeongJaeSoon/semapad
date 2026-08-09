@@ -83,7 +83,10 @@ def test_install_hooks_claims_old_paneglow_entries(tmp_path: Path):
     assert code == 0
     settings = json.loads(p.claude_settings.read_text())
     text = json.dumps(settings)
-    assert "paneglow" not in text                     # spec §10: no double firing
+    # spec §10 contract: no old module invocation survives. The interpreter
+    # path may legitimately contain "paneglow" (e.g. its venv), so match the
+    # module-call shape, not the bare word.
+    assert "-m paneglow.cli hook" not in text         # no double firing
     assert "auto-fmt.sh" in text                      # foreign hooks untouched
     assert settings["model"] == "opus"                # unrelated settings kept
     for event in cli._HOOK_EVENTS:
