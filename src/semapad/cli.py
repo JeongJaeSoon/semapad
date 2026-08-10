@@ -401,17 +401,18 @@ def _cmd_autostart(paths: Paths, action: str, stdout=None) -> int:
             # instance starts, or the new one exits on the daemon lock.
             subprocess.run(["/usr/bin/pkill", "-f", "semapad(\\.cli)? daemon"],
                            check=False)
-            # launchd can refuse a bootstrap for a label it just booted out;
-            # a short retry absorbs that window (observed live, 2026-08-10).
+            # launchd can refuse a bootstrap for a label it just booted out
+            # (EINVAL) or while busy (EIO) -- both observed live, 2026-08-10.
+            # 1+2+3+4 s of growing backoff outlasts the longest window seen.
             import time as time_mod
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     controller.bootstrap()
                     break
                 except launch_agent.LaunchAgentError:
-                    if attempt == 2:
+                    if attempt == 4:
                         raise
-                    time_mod.sleep(1.0)
+                    time_mod.sleep(attempt + 1.0)
         print("semapad: installed login autostart", file=stdout)
         return 0
 
