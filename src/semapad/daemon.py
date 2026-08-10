@@ -410,10 +410,13 @@ class Daemon:
             self._finish_input(outcome, now)
             self.last_input = {"key": parsed.key_index,
                                "result": outcome.result, "at": now}
+            self._had_input = True
+            import time as time_mod
+            lat_ms = round((time_mod.time() - received.received_at) * 1000, 1)
             slots = self._prev_slots or ()
             self._log_event(
                 "input", key=parsed.key_index, result=outcome.result,
-                owner=self.owner,
+                owner=self.owner, lat_ms=lat_ms,
                 local_id=(slots[parsed.key_index]
                           if parsed.key_index < len(slots) else None))
 
@@ -457,9 +460,14 @@ class Daemon:
     def tick(self, now: float) -> None:
         if self._closed:
             return
+        import time as time_mod
         self._tick_causes = []
+        self._stage_ms: dict[str, float] = {}
+        self._had_input = False
+        t0 = time_mod.perf_counter()
         self._reload_config()
         built = self._build_view(now)
+        self._stage_ms["view"] = round((time_mod.perf_counter() - t0) * 1000, 1)
         self._ensure_pad(now)
 
         if self.pad is not None and self._verified_epoch is not None:
@@ -483,6 +491,7 @@ class Daemon:
             self._feedback_until = None
             self.compositor.mark_dirty(keys=False, ambient=True)
             self._cause("input_feedback_restore")
+        _paint_t0 = __import__("time").perf_counter()
 
         if self.pad is not None and self._verified_epoch is not None \
                 and self._verified_layer is not None:
@@ -495,12 +504,19 @@ class Daemon:
                                           feedback=feedback)):
                 self._cause(cause)
 
+        self._stage_ms["paint"] = round(
+            (__import__("time").perf_counter() - _paint_t0) * 1000, 1)
         self.causes = tuple(self._tick_causes)
         if self.causes:
             self.generation += 1
         if self.causes or now >= self._next_snapshot_due:
             self._next_snapshot_due = now + _SNAPSHOT_INTERVAL_SECONDS
+            _snap_t0 = __import__("time").perf_counter()
             self._write_snapshot(built, now)
+            self._stage_ms["snapshot"] = round(
+                (__import__("time").perf_counter() - _snap_t0) * 1000, 1)
+        if self._had_input:
+            self._log_event("tick_stages", **self._stage_ms)
 
     def _send(self, message: dict, now: float) -> bool:
         current = self.pad
