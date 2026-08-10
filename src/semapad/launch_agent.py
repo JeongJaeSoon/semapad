@@ -1,4 +1,4 @@
-"""Private per-user LaunchAgent support for the Paneglow daemon.
+"""Private per-user LaunchAgent support for the semapad daemon.
 
 The plist is deliberately small and deterministic.  launchd runs the existing
 foreground ``daemon`` command; it must never run ``start``, which detaches a child
@@ -176,9 +176,9 @@ def build_spec(
 
 
 def _generated_manifest(value: object, *, account_home: Path) -> bool:
-    """Recognize only the exact safe shape emitted by Paneglow.
+    """Recognize only the exact safe shape emitted by semapad.
 
-    The interpreter and explicit Paneglow path overrides may differ so an old
+    The interpreter and explicit semapad path overrides may differ so an old
     editable-install location remains removable and migratable.
     """
     if type(value) is not dict or set(value) != _MANIFEST_KEYS:
@@ -359,47 +359,50 @@ def ensure_lock_directory(spec: Spec) -> None:
     _check_directory(agents, uid=spec.uid)
 
 
+def _harden_owned_directory(path: Path, *, uid: int, what: str) -> None:
+    """mkdir 0700, or harden a pre-existing 0755 one after inode validation.
+
+    Manual runs (nohup semapad daemon/ui) create these with the default
+    umask; they are owner-controlled and non-writable by others, so install
+    may tighten them in place instead of rejecting an otherwise safe setup.
+    """
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+    except OSError as error:
+        raise LaunchAgentError(f"{what} is unavailable") from error
+    _check_directory(path, uid=uid)
+    before = os.lstat(path)
+    try:
+        os.chmod(path, 0o700, follow_symlinks=False)
+    except OSError as error:
+        raise LaunchAgentError(f"could not harden {what}") from error
+    after = os.lstat(path)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise LaunchAgentError(f"{what} changed while hardening")
+    _check_directory(path, uid=uid, exact_mode=0o700)
+
+
 def _ensure_runtime_directories(spec: Spec) -> None:
     _check_home_ancestors(spec)
     runtime_home = Path(spec.environment.get(
         "SEMAPAD_HOME", str(spec.account_home / ".semapad")
     ))
-    runtime_dir = runtime_home / "runtime"
-    try:
-        runtime_home.mkdir(mode=0o700, exist_ok=True)
-    except OSError as error:
-        raise LaunchAgentError("Paneglow private directory is unavailable") from error
-    # Older versions created ~/.semapad as 0755. It is owner-controlled and
-    # non-writable by others, so installation may harden it after validating
-    # the exact inode instead of rejecting an otherwise safe live install.
-    _check_directory(runtime_home, uid=spec.uid)
-    before = os.lstat(runtime_home)
-    try:
-        os.chmod(runtime_home, 0o700, follow_symlinks=False)
-    except OSError as error:
-        raise LaunchAgentError("could not harden Paneglow home") from error
-    after = os.lstat(runtime_home)
-    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-        raise LaunchAgentError("Paneglow home changed while hardening")
-    _check_directory(runtime_home, uid=spec.uid, exact_mode=0o700)
-
-    for directory in (runtime_dir,):
-        try:
-            directory.mkdir(mode=0o700, exist_ok=True)
-        except OSError as error:
-            raise LaunchAgentError("Paneglow private directory is unavailable") from error
-        _check_directory(directory, uid=spec.uid, exact_mode=0o700)
+    _harden_owned_directory(runtime_home, uid=spec.uid, what="semapad home")
+    _harden_owned_directory(runtime_home / "runtime", uid=spec.uid,
+                            what="semapad runtime directory")
+    _harden_owned_directory(runtime_home / "logs", uid=spec.uid,
+                            what="semapad log directory")
 
 
 def ensure_install_directories(spec: Spec) -> None:
-    """Create only Paneglow-owned directories; never chmod shared Library."""
+    """Create only semapad-owned directories; never chmod shared Library."""
     ensure_lock_directory(spec)
     _ensure_runtime_directories(spec)
     for directory in (spec.log_path.parent,):
         try:
             directory.mkdir(mode=0o700, exist_ok=True)
         except OSError as error:
-            raise LaunchAgentError("Paneglow private directory is unavailable") from error
+            raise LaunchAgentError("semapad private directory is unavailable") from error
         _check_directory(directory, uid=spec.uid, exact_mode=0o700)
 
 
@@ -476,7 +479,7 @@ def atomic_write_manifest(spec: Spec, payload: bytes | None = None) -> None:
 def remove_manifest(spec: Spec, inspection: ManifestInspection) -> None:
     """Unlink exactly the inspected, recognized inode."""
     if not inspection.owned or inspection.device is None or inspection.inode is None:
-        raise LaunchAgentError("LaunchAgent plist is not owned by Paneglow")
+        raise LaunchAgentError("LaunchAgent plist is not owned by semapad")
     if not validate_manifest_ancestors(spec):
         raise LaunchAgentError("LaunchAgent directory is unavailable")
     try:
