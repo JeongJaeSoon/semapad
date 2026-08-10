@@ -1,6 +1,6 @@
 [project]
 name = "semapad"
-version = "0.1.9"
+version = "0.1.10"
 description = "Colour-signal pad and dashboard for Claude Desktop conversations"
 readme = "README.md"
 requires-python = ">=3.10"
