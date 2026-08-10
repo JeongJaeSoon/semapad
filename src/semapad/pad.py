@@ -722,7 +722,8 @@ class Pad:
             )
 
     def _pump_for(self, seconds: float, *, stop_on_disconnect: bool,
-                  surface_callback_error: bool) -> None:
+                  surface_callback_error: bool,
+                  stop_on_message: bool = False) -> None:
         registration = self._registration
         if registration is None:
             self._drain_reports()
@@ -748,6 +749,10 @@ class Pad:
             self._drain_reports()
             if surface_callback_error:
                 self._raise_callback_error()
+            if stop_on_message and self._messages:
+                # A waiting caller wants latency, not a full window: a key
+                # press dispatches within one pump quantum of arriving.
+                break
             if duration == 0:
                 break
 
@@ -759,7 +764,8 @@ class Pad:
         self._drain_reports()
         self._raise_callback_error()
         self._pump_for(
-            seconds, stop_on_disconnect=True, surface_callback_error=True)
+            seconds, stop_on_disconnect=True, surface_callback_error=True,
+            stop_on_message=True)
         messages, self._messages = self._messages, []
         return messages
 

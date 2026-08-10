@@ -372,7 +372,10 @@ def test_poll_services_runloop_and_decodes_input_report():
     ]
     pumps = [event for event in backend.events
              if isinstance(event, tuple) and event[0] == "pump"]
-    assert pumps and sum(event[1] for event in pumps) == pytest.approx(0.1)
+    # Early exit on arrival: the message came in the first quantum, so the
+    # run loop must NOT be held for the rest of the window (felt latency).
+    assert pumps and sum(event[1] for event in pumps) <= 0.1
+    assert sum(event[1] for event in pumps) == pytest.approx(0.05)
 
 
 def test_poll_received_preserves_report_order_times_and_fixed_metadata_shape():
@@ -919,3 +922,14 @@ def test_round_trip_on_real_hardware():
         assert device.status_verified is True
     finally:
         device.close()
+
+
+def test_poll_received_returns_early_when_input_arrives():
+    """A key press must dispatch within one pump quantum, not one full window
+    (the fixed 250 ms window added ~125 ms of felt switch latency)."""
+    device, backend = open_fake()
+    backend.queue_message({"m": "v.oai.hid", "p": {"k": "AG00", "act": 1}})
+    started = backend.clock.now
+    messages = device.poll_received(5.0)
+    assert [m.message.get("m") for m in messages] == ["v.oai.hid"]
+    assert backend.clock.now - started < 0.2   # one quantum, not 5 s

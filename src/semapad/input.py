@@ -26,19 +26,36 @@ RESULTS = frozenset({
 })
 
 
+_children: list = []   # fire-and-forget opens awaiting reaping
+
+
+def _reap_children() -> None:
+    _children[:] = [child for child in _children if child.poll() is None]
+
+
 def open_local(local_id: str,
-               runner: Callable[..., object] = subprocess.run) -> bool:
-    """Open a conversation by its own local_id -- dead conversations included."""
+               spawner: Callable[..., object] = subprocess.Popen) -> bool:
+    """Open a conversation by its own local_id -- dead conversations included.
+
+    Fire-and-forget: /usr/bin/open can block for hundreds of milliseconds
+    waiting on LaunchServices, and a synchronous wait both delayed the switch
+    and serialized rapid presses behind each other. The URL is validated
+    before spawning, so a successful spawn is the success signal.
+    """
     try:
         url = deeplink.url_for(local_id)
     except ValueError:
         return False
+    _reap_children()
     try:
-        completed = runner(["/usr/bin/open", url], check=False,
-                           timeout=_OPEN_TIMEOUT_SECONDS)
-    except (OSError, subprocess.TimeoutExpired):
+        child = spawner(["/usr/bin/open", url],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+    except OSError:
         return False
-    return getattr(completed, "returncode", None) == 0
+    _children.append(child)
+    return True
 
 
 @dataclass(frozen=True)
