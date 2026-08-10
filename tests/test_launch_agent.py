@@ -64,7 +64,12 @@ class FakeController:
 
 
 def test_manifest_is_exact_and_keeps_lexical_venv_interpreter(tmp_path: Path):
-    target = Path(sys.executable)
+    # A fabricated 0755 interpreter instead of sys.executable: CI runners keep
+    # their hostedtoolcache pythons group-writable, which validate_program
+    # rightly refuses. The lexical-path property only needs *a* symlink.
+    target = tmp_path / "real-python"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
     program = tmp_path / "venv" / "bin" / "python"
     program.parent.mkdir(parents=True)
     program.symlink_to(target)
