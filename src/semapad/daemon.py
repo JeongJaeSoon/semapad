@@ -405,6 +405,11 @@ class Daemon:
                     message, now, owner=self.owner,
                     layer_one=self._gate_layer_one()):
                 self._cause(cause)
+            if pad_module.is_vendor_write(message):
+                # Raw capture: does the device ACK echo the vendor's payload?
+                # Decides whether Codex's session states are observable (#41).
+                self._log_event("vendor_write", owner=self.owner,
+                                message=message)
             parsed = input_module.parse(message)
             if parsed is None or parsed == "release":
                 continue
