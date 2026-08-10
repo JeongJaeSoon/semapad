@@ -256,6 +256,9 @@ const HEX = c => c === null || c === undefined ? null
                 : '#' + c.toString(16).padStart(6, '0');
 const NAMES = {idle:'Idle', working:'Working', waiting:'Requires input',
                done:'Done', error:'Error'};
+const RESULTS = {opened:'열림', open_failed:'열기 실패', empty_slot:'빈 키',
+                 ignored_owner:'무시 — Claude 소유가 아님',
+                 ignored_layer:'무시 — Layer 1 아님', ignored_input:'무효 신호'};
 const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰색',
                  no_hook:'훅 신호 없음 → idle 흰색',
                  working_timeout:'working 시간 초과 → idle 강등', state:'훅 상태',
@@ -294,21 +297,29 @@ function renderDevice(d){
     if (dev.last_input)
       rows += deviceRow('마지막 키 입력',
         `<span class="badge">A${dev.last_input.key + 1}</span> ` +
-        `${esc(dev.last_input.result)} · ${ago(dev.last_input.at)}`,
+        `${RESULTS[dev.last_input.result] ?? esc(dev.last_input.result)}` +
+        ` · ${ago(dev.last_input.at)}`,
         '키를 눌렀는데 이 행이 안 바뀌면 패드 신호가 데몬에 도달하지 않은 것');
   else if (dev.last_input_result)
-      rows += deviceRow('마지막 키 입력', esc(dev.last_input_result));
+      rows += deviceRow('마지막 키 입력',
+        RESULTS[dev.last_input_result] ?? esc(dev.last_input_result));
   }
   rows += deviceRow('소유권',
     (d.frontmost.owner ? `<b>${esc(d.frontmost.owner)}</b>` : '유지(규칙 불일치)'),
     `frontmost: ${esc(d.frontmost.bundle_id ?? 'n/a')}` +
     (d.frontmost.error ? ` — <span class="err">${esc(d.frontmost.error)}</span>` : ''));
-  rows += deviceRow('데이터 소스',
-    d.source === 'daemon' ? '데몬 스냅샷' : 'ui 자체 계산',
-    d.config_pending ? '<span class="warn">설정 저장됨 — 데몬 반영 대기 중</span>' : '');
-  rows += deviceRow('프로세스',
-    `${d.processes.count}개` +
-    (d.processes.authoritative ? '' : ' <span class="warn">(비권위 스캔)</span>'));
+  rows += deviceRow('패드 동기화',
+    d.source === 'daemon' ? '<span class="ok">화면 = 패드 ✓</span>'
+                          : '<span class="warn">데몬 미실행 — 화면만 계산 중</span>',
+    (d.source === 'daemon'
+      ? '이 화면은 패드를 칠하는 데몬의 계산 결과를 그대로 그립니다'
+      : '패드는 지금 아무도 칠하고 있지 않습니다') +
+    (d.config_pending ? ' · <span class="warn">설정 저장됨 — 반영 대기 중</span>' : ''));
+  const linked = d.conversations.filter(c => c.process_alive).length;
+  rows += deviceRow('실행 중 세션',
+    `대화와 연결 ${linked} / 전체 ${d.processes.count}` +
+    (d.processes.authoritative ? '' : ' <span class="warn">(비권위 스캔)</span>'),
+    '전체에는 사이드바 대화와 연결되지 않은 세션(다른 세션의 서브에이전트 등)도 포함됩니다');
   document.getElementById('device').innerHTML = rows;
 }
 
@@ -316,7 +327,8 @@ function renderDevice(d){
 // mini-knob, wide mic (span 2), face key — command zone is vendor territory.
 function agentKeycap(s){
   if (!s || !s.local_id)
-    return `<div class="kc agent"><span class="led"></span>
+    return `<div class="kc agent${window.__pressKey === (s && s.__idx) ? ' pressed' : ''}">
+      <span class="led"></span>
       <div class="tip"><div class="tt">빈 키</div>
       <div class="ts">${dot(null)} Off — 세션 없음</div></div></div>`;
   const color = HEX(s.color);
@@ -336,8 +348,10 @@ function agentKeycap(s){
 function renderPad(d){
   const S = d.slots;
   const li = d.device && d.device.last_input;
-  window.__pressKey = (li && (Date.now()/1000 - li.at) < 1.5) ? li.key : null;
-  S.forEach((s, i) => { if (s) s.__idx = i; });
+  window.__pressKey = (li && (Date.now()/1000 - li.at) < 4) ? li.key : null;
+  for (let i = 0; i < S.length; i++){
+    if (S[i]) S[i].__idx = i; else S[i] = {__idx: i, local_id: null};
+  }
   document.getElementById('pad').innerHTML =
     `<div class="kc knob"></div>` + agentKeycap(S[0]) + agentKeycap(S[1]) +
     `<div class="kc stick"></div>` +
@@ -404,14 +418,38 @@ function fieldInput(f){
           size="34" placeholder="쉼표로 구분">`;   // strings
 }
 
+const CFG_LABELS = {
+  'colors.idle':    ['Idle 색', '할 일 없는 세션의 키 색'],
+  'colors.working': ['Working 색', '에이전트 작업 중인 키 색'],
+  'colors.waiting': ['입력 대기 색', '내 입력을 기다리는 키 색'],
+  'colors.done':    ['완료 색', '끝났거나 안 본 활동이 있는 키 색'],
+  'colors.error':   ['오류 색', '오류가 난 키 색'],
+  'gate.mode':      ['키 소유권 판정', 'frontmost: 전면 앱 따라감 · always: 항상 semapad · off: 비활성'],
+  'gate.own_when':  ['semapad가 소유하는 앱', '이 앱이 전면이면 키가 Claude 세션을 표시'],
+  'gate.yield_to':  ['양보 대상 앱', '이 앱이 전면이면 키를 벤더에게 양보'],
+  'underglow.claude': ['테두리 색 — Claude 소유', 'semapad가 키를 소유할 때 semapad가 칠하는 테두리'],
+  'underglow.codex':  ['테두리 색 — 양보 중', 'Codex가 키를 소유할 때 semapad가 칠하는 테두리 (Codex 앱 설정이 아님)'],
+  'underglow.scope':  ['테두리 알림 범위', 'outside: 키에 없는 대화만 · all_sessions: 전부 · off: 끔'],
+  'underglow.reclaim_delay_ms': ['테두리 되찾기 지연 (ms)', '벤더가 테두리를 칠한 뒤 되찾기까지 대기'],
+  'underglow.effects.normal': ['테두리 효과 — 평상시', ''],
+  'underglow.effects.alert':  ['테두리 효과 — 알림', '화면 밖 대화가 기다릴 때'],
+  'underglow.effects.fault':  ['테두리 효과 — 실패 피드백', '빈 키·열기 실패 시 잠깐'],
+};
 let CFG_FIELDS = [];
 async function loadConfig(){
   const r = await fetch('/config');
   CFG_FIELDS = (await r.json()).fields;
-  document.getElementById('cfgrows').innerHTML = CFG_FIELDS.map(f =>
-    `<div class="row"><div><div class="lab"><code>${f.path}</code></div>
-     <div class="desc err" id="e_${f.path.replaceAll('.', '_')}"></div></div>
-     <div class="val">${fieldInput(f)}</div></div>`).join('');
+  document.getElementById('cfgrows').innerHTML =
+    `<div class="row"><div class="desc">이 설정은 semapad의 표시 동작을 바꿉니다 —
+     Claude/Codex 앱 자체의 설정이 아닙니다.</div></div>` +
+    CFG_FIELDS.map(f => {
+      const [label, desc] = CFG_LABELS[f.path] ?? [null, ''];
+      return `<div class="row"><div>
+       <div class="lab">${label ? esc(label) : `<code>${f.path}</code>`}</div>
+       ${desc ? `<div class="desc">${esc(desc)}</div>` : ''}
+       <div class="desc err" id="e_${f.path.replaceAll('.', '_')}"></div></div>
+       <div class="val">${fieldInput(f)}</div></div>`;
+    }).join('');
 }
 
 async function saveConfig(ev){

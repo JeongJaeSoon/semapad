@@ -347,7 +347,7 @@ class Daemon:
                     layer_one=self._gate_layer_one()):
                 self._cause(cause)
             parsed = input_module.parse(message)
-            if parsed is None:
+            if parsed is None or parsed == "release":
                 continue
             if parsed == "invalid":
                 self._finish_input(input_module.Outcome("ignored_input"), now)
