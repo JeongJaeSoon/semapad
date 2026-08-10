@@ -458,6 +458,7 @@ class Daemon:
             self._log_event(
                 "input", key=parsed.key_index, result=outcome.result,
                 owner=self.owner, lat_ms=lat_ms,
+                transport=getattr(self.pad, "transport", None),
                 local_id=(slots[parsed.key_index]
                           if parsed.key_index < len(slots) else None))
 
@@ -566,6 +567,7 @@ class Daemon:
                 (__import__("time").perf_counter() - _snap_t0) * 1000, 1)
         if self._had_input:
             self._log_event("tick_stages", causes=list(self.causes),
+                            transport=getattr(self.pad, "transport", None),
                             **self._stage_ms)
 
     def _send(self, message: dict, now: float) -> bool:
