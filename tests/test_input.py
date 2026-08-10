@@ -103,18 +103,19 @@ def test_opener_exception_is_a_failed_open():
 
 # --- open_local --------------------------------------------------------------
 
-def test_open_local_builds_the_epitaxy_route():
+def test_open_local_builds_the_epitaxy_route_and_does_not_wait():
     calls: list = []
 
-    class Done:
-        returncode = 0
+    class Child:
+        def poll(self):
+            return 0    # exited; the reaper may drop it
 
-    def runner(command, **kwargs):
+    def spawner(command, **kwargs):
         calls.append(command)
-        return Done()
+        return Child()
 
     lid = "local_00000000-0000-4000-8000-000000000000"
-    assert input_module.open_local(lid, runner=runner)
+    assert input_module.open_local(lid, spawner=spawner)
     assert calls == [["/usr/bin/open", f"claude://claude.ai/epitaxy/{lid}"]]
 
 
