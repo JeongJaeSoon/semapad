@@ -190,6 +190,8 @@ h2 small { font-weight: 400; color:#8a8a86; font-size:.82rem; }
 .kc.agent { cursor: default; }
 .kc.agent.lit .led { box-shadow: 0 0 10px 2px var(--glow); }
 .kc.agent:hover { box-shadow: inset 0 0 0 2px #e8a33d, 0 1px 2px rgba(0,0,0,.06); }
+.kc.agent.pressed { box-shadow: inset 0 0 0 3px #e8a33d, 0 1px 8px rgba(232,163,61,.5); }
+.ticon { width: 1rem; height: 1rem; vertical-align: -2px; margin-right: .35rem; }
 .tip { display:none; position:absolute; bottom: calc(100% + 10px); left:50%;
        transform: translateX(-50%); min-width: 15rem; max-width: 19rem;
        background:#fff; border:1px solid #e7e6e2; border-radius:12px;
@@ -261,6 +263,8 @@ const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰�
 function esc(s){ const d=document.createElement('span'); d.textContent=s??'';
                  return d.innerHTML; }
 function dot(color){ return `<span class="dot" style="background:${color??'#000'}"></span>`; }
+const ICON_USB = `<svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V7"/><path d="M12 7l-3 3"/><path d="M12 7l3-3"/><circle cx="12" cy="21" r="1.6" fill="currentColor" stroke="none"/><path d="M8 12H5v-2"/><path d="M8 12l4 3"/><rect x="15" y="8" width="3" height="3" transform="rotate(0 16.5 9.5)"/><path d="M16.5 11l-4.5 4"/></svg>`;
+const ICON_BT = `<svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></svg>`;
 function ago(sec){ if(!sec) return '-'; const d=Date.now()/1000-sec;
   if(d<60) return Math.round(d)+'s 전'; if(d<3600) return Math.round(d/60)+'m 전';
   if(d<86400) return Math.round(d/3600)+'h 전'; return Math.round(d/86400)+'d 전'; }
@@ -281,11 +285,18 @@ function renderDevice(d){
       dev.connected ? '<span class="ok">Connected</span>'
                     : '<span class="err">Not connected</span>',
       dev.pad_error_code ? `오류: ${esc(dev.pad_error_code)}` : '');
+    const ticon = dev.transport === 'USB' ? ICON_USB
+                : dev.transport === 'BLE' ? ICON_BT : '';
     rows += deviceRow('Transport · Firmware · Layer',
-      `${esc(dev.transport ?? '?')} · ${esc(dev.firmware ?? '?')} · L${dev.layer ?? '?'}` +
+      `${ticon}${esc(dev.transport ?? '?')} · ${esc(dev.firmware ?? '?')} · L${dev.layer ?? '?'}` +
       (dev.status_verified ? ' <span class="ok">verified</span>'
                            : ' <span class="warn">미검증</span>'));
-    if (dev.last_input_result)
+    if (dev.last_input)
+      rows += deviceRow('마지막 키 입력',
+        `<span class="badge">A${dev.last_input.key + 1}</span> ` +
+        `${esc(dev.last_input.result)} · ${ago(dev.last_input.at)}`,
+        '키를 눌렀는데 이 행이 안 바뀌면 패드 신호가 데몬에 도달하지 않은 것');
+  else if (dev.last_input_result)
       rows += deviceRow('마지막 키 입력', esc(dev.last_input_result));
   }
   rows += deviceRow('소유권',
@@ -311,7 +322,7 @@ function agentKeycap(s){
   const color = HEX(s.color);
   const title = s.title || s.local_id.slice(0, 18) + '…';
   const lit = s.color !== null && s.color !== undefined;
-  return `<div class="kc agent ${lit ? 'lit' : ''}" style="--glow:${color??'transparent'}">
+  return `<div class="kc agent ${lit ? 'lit' : ''}${window.__pressKey === (s.__idx ?? -1) ? ' pressed' : ''}" style="--glow:${color??'transparent'}">
     <span class="led" style="background:${color??'transparent'}"></span>
     <div class="tip"><div class="tt">${esc(title)}</div>
       <div class="ts">${dot(color)} ${NAMES[s.state]??s.state}
@@ -324,6 +335,9 @@ function agentKeycap(s){
 
 function renderPad(d){
   const S = d.slots;
+  const li = d.device && d.device.last_input;
+  window.__pressKey = (li && (Date.now()/1000 - li.at) < 1.5) ? li.key : null;
+  S.forEach((s, i) => { if (s) s.__idx = i; });
   document.getElementById('pad').innerHTML =
     `<div class="kc knob"></div>` + agentKeycap(S[0]) + agentKeycap(S[1]) +
     `<div class="kc stick"></div>` +
