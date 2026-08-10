@@ -530,6 +530,15 @@ loadConfig();
 
 
 class _Handler(BaseHTTPRequestHandler):
+
+    def handle(self) -> None:
+        # A browser dropping a long-poll mid-reply (reload, tab close) is
+        # routine, not an error worth a traceback on the terminal.
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
     dashboard: Dashboard   # injected by make_server()
     csrf_token: str        # injected by make_server()
 
