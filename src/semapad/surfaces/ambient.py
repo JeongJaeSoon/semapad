@@ -12,17 +12,20 @@ from semapad.view import View
 _NOTABLE = ("waiting", "error")
 
 
-def light(view: View, owner: str, cfg: Config, *, feedback: bool) -> Light:
+def light(view: View, owner: str, cfg: Config, *,
+          flash: Light | None = None) -> Light:
     """The desired border light for this tick.
 
-    Fault feedback (empty key / failed open) overrides everything briefly.
+    A flash (press echo in the key's colour, or the fault effect on an empty
+    key / failed open) overrides everything briefly; the daemon owns its
+    construction and timing.
     The owner colour carries the alert effect when a conversation demanding a
     human is not visible: with scope ``outside`` that means bumped off the six
     keys; while Codex owns the pad, every Claude conversation is out of sight,
     so all states count (spec §9.1 "Codex 보는 동안 기다리면 blink").
     """
-    if feedback:
-        return Light(cfg.underglow_claude, cfg.effect_fault)
+    if flash is not None:
+        return flash
     if owner == "none" or cfg.underglow_scope == "off":
         return LIGHT_OFF
 

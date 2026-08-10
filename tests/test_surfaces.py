@@ -22,24 +22,23 @@ def _cfg(**kwargs) -> Config:
     return Config(**kwargs)
 
 
-def test_ambient_feedback_overrides_everything():
+def test_ambient_flash_overrides_everything():
     v = _build([], set(), [])
-    light = ambient.light(v, "none", _cfg(), feedback=True)
-    assert light == Light(0xFF6D00, "rainbow")
+    flash = Light(0x00C853)          # press echo in the key's colour
+    assert ambient.light(v, "none", _cfg(), flash=flash) is flash
 
 
 def test_ambient_off_without_owner_or_scope():
     v = _build([conv("a", activity=1.0)], set(), [])
-    assert ambient.light(v, "none", _cfg(), feedback=False) is LIGHT_OFF
-    assert ambient.light(v, "claude", _cfg(underglow_scope="off"),
-                         feedback=False) is LIGHT_OFF
+    assert ambient.light(v, "none", _cfg()) is LIGHT_OFF
+    assert ambient.light(v, "claude", _cfg(underglow_scope="off")) is LIGHT_OFF
 
 
 def test_ambient_owner_colours_and_normal_effect():
     v = _build([conv("a", activity=1.0)], set(), [])
-    assert ambient.light(v, "claude", _cfg(), feedback=False) == \
+    assert ambient.light(v, "claude", _cfg()) == \
         Light(0xFF6D00, "solid")
-    assert ambient.light(v, "codex", _cfg(), feedback=False) == \
+    assert ambient.light(v, "codex", _cfg()) == \
         Light(0x304FFE, "solid")
 
 
@@ -48,15 +47,15 @@ def test_ambient_outside_scope_alerts_only_for_bumped_conversations():
     live = {f"c{i}" for i in range(7)}
     # a waiting conversation that won a key: no alert for claude owner
     v = _build(convs, live, [rec("c6", AgentState.WAITING)])
-    assert ambient.light(v, "claude", _cfg(), feedback=False).effect == "solid"
+    assert ambient.light(v, "claude", _cfg()).effect == "solid"
     # all seven waiting: the bumped one alerts
     v = _build(convs, live, [rec(f"c{i}", AgentState.WAITING) for i in range(7)])
-    assert ambient.light(v, "claude", _cfg(), feedback=False).effect == "blink"
+    assert ambient.light(v, "claude", _cfg()).effect == "blink"
 
 
 def test_ambient_codex_owner_alerts_for_any_waiting_conversation():
     # spec §9.1: while Codex is watched, a waiting Claude conversation blinks
     convs = [conv("a", cli="ca", activity=1.0)]
     v = _build(convs, {"ca"}, [rec("ca", AgentState.WAITING)])
-    light = ambient.light(v, "codex", _cfg(), feedback=False)
+    light = ambient.light(v, "codex", _cfg())
     assert light == Light(0x304FFE, "blink")

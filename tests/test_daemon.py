@@ -224,6 +224,25 @@ def test_empty_key_press_flashes_fault_then_restores(tmp_path):
     assert restored[0]["p"]["ambient"]["e"] == 1    # back to solid owner
 
 
+def test_opened_press_echoes_key_colour_on_border_then_restores(tmp_path):
+    cli = str(uuid.uuid4())
+    _conversation(tmp_path / "mapping", cli)
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    pad.sent.clear()
+    pad.push(hid("AG00"))                # occupied slot, idle → white key
+    daemon.tick(2.0)
+    assert daemon.last_input_result == "opened"
+    echo = [m for m in pad.sent if m["m"] == "v.oai.rgbcfg"]
+    assert echo[0]["p"]["ambient"]["c"] == 0xFFFFFF   # pressed key's colour
+    assert echo[0]["p"]["ambient"]["e"] == 1          # solid, not fault
+    pad.sent.clear()
+    daemon.tick(2.5)                     # echo expired
+    restored = [m for m in pad.sent if m["m"] == "v.oai.rgbcfg"]
+    assert restored[0]["p"]["ambient"]["c"] == 0xFF6D00   # owner border
+
+
 def test_stale_epoch_messages_are_never_dispatched(tmp_path):
     cli = str(uuid.uuid4())
     _conversation(tmp_path / "mapping", cli)

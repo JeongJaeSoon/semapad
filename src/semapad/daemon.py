@@ -19,7 +19,7 @@ from semapad import pad as pad_module
 from semapad import view as view_module
 from semapad.compositor import Compositor
 from semapad.config import Config, load as load_config
-from semapad.model import OWNERS
+from semapad.model import OWNERS, Light
 from semapad.sources import conversations, hooks, processes
 from semapad.surfaces import agent_keys, ambient
 
@@ -88,6 +88,8 @@ class Daemon:
         self._prev_slots: tuple[str | None, ...] | None = None
         self._debounce = view_module.DepartureDebouncer()
         self._feedback_until: float | None = None
+        self._flash_light: Light | None = None
+        self._slot_colors: tuple[int | None, ...] = ()
         self._verified_epoch: int | None = None
         self._verified_layer: int | None = None
         self._next_status_due = 0.0
@@ -165,6 +167,7 @@ class Daemon:
             diagnostics=conv_diags + snapshot.diagnostics,
         )
         self._prev_slots = tuple(slot.local_id for slot in built.slots)
+        self._slot_colors = tuple(slot.color for slot in built.slots)
         self._processes_info = {"count": len(snapshot.sessions),
                                 "authoritative": snapshot.authoritative,
                                 "diagnostics": list(snapshot.diagnostics)}
@@ -371,11 +374,19 @@ class Daemon:
 
     # --- input & messages ---------------------------------------------------
 
-    def _finish_input(self, outcome: input_module.Outcome, now: float) -> None:
+    def _finish_input(self, outcome: input_module.Outcome, now: float,
+                      key_colour: int | None = None) -> None:
         if outcome.press_seen:
             # The pad lights the whole A-zone itself while a key is down (#60).
             self.compositor.mark_dirty(keys=True, ambient=False)
+        flash = None
         if outcome.feedback:
+            flash = Light(self.cfg.underglow_claude, self.cfg.effect_fault)
+        elif outcome.result == "opened" and key_colour is not None:
+            # Press echo: the border briefly takes the pressed key's colour.
+            flash = Light(key_colour)
+        if flash is not None:
+            self._flash_light = flash
             self._feedback_until = now + _FEEDBACK_SECONDS
             self.compositor.mark_dirty(keys=False, ambient=True)
             self._cause("input_feedback")
@@ -407,12 +418,16 @@ class Daemon:
             outcome = self.router.dispatch(
                 parsed, now, owner=self.owner, layer_one=self._gate_layer_one(),
                 slots=self._prev_slots or (None,) * view_module.KEY_COUNT)
-            self._finish_input(outcome, now)
+            colours = self._slot_colors
+            self._finish_input(
+                outcome, now,
+                key_colour=(colours[parsed.key_index]
+                            if parsed.key_index < len(colours) else None))
             self.last_input = {"key": parsed.key_index,
                                "result": outcome.result, "at": now}
             self._had_input = True
             import time as time_mod
-            lat_ms = round((time_mod.time() - received.received_at) * 1000, 1)
+            lat_ms = round((time_mod.monotonic() - received.received_at) * 1000, 1)
             slots = self._prev_slots or ()
             self._log_event(
                 "input", key=parsed.key_index, result=outcome.result,
@@ -489,19 +504,21 @@ class Daemon:
 
         if self._feedback_until is not None and now >= self._feedback_until:
             self._feedback_until = None
+            self._flash_light = None
             self.compositor.mark_dirty(keys=False, ambient=True)
             self._cause("input_feedback_restore")
         _paint_t0 = __import__("time").perf_counter()
 
         if self.pad is not None and self._verified_epoch is not None \
                 and self._verified_layer is not None:
-            feedback = self._feedback_until is not None
+            flash = (self._flash_light
+                     if self._feedback_until is not None else None)
             for cause in self.compositor.paint(
                     lambda message: self._send(message, now), now,
                     owner=self.owner, layer=self._verified_layer,
                     keys=agent_keys.lights(built),
                     ambient=ambient.light(built, self.owner, self.cfg,
-                                          feedback=feedback)):
+                                          flash=flash)):
                 self._cause(cause)
 
         self._stage_ms["paint"] = round(
