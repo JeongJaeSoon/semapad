@@ -123,9 +123,10 @@ class Dashboard:
         # Section A: Phase 1 touches no hardware -- state the fact instead of
         # pretending a device section does not exist.
         snap["device"] = {
-            "phase": 1,
             "connected": False,
-            "note": "Phase 1: no pad writes (spec §0). Device I/O arrives in Phase 3.",
+            "note": "데몬이 실행 중이 아닙니다 — `semapad autostart install`"
+                    " 또는 `semapad daemon`으로 시작하세요. (패드 표시·키 입력은"
+                    " 데몬이 담당합니다)",
         }
         snap["frontmost"] = self._frontmost_section(cfg)
         snap["processes"] = {

@@ -558,6 +558,7 @@ class Controller:
     def __init__(self, spec: Spec, *, runner: Runner = subprocess.run) -> None:
         self.spec = spec
         self.runner = runner
+        self.last_stderr = ""
 
     def _call(self, *arguments: str, timeout: float = 10.0) -> bool:
         try:
@@ -565,12 +566,14 @@ class Controller:
                 [LAUNCHCTL, *arguments],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 check=False,
                 timeout=timeout,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise LaunchAgentError("launchctl operation failed") from error
+        stderr = getattr(completed, "stderr", b"") or b""
+        self.last_stderr = stderr.decode(errors="replace").strip()
         return getattr(completed, "returncode", 1) == 0
 
     def domain_available(self) -> bool:
@@ -583,7 +586,8 @@ class Controller:
 
     def bootstrap(self) -> None:
         if not self._call("bootstrap", self.spec.domain, str(self.spec.plist_path)):
-            raise LaunchAgentError("could not bootstrap LaunchAgent")
+            detail = f" ({self.last_stderr})" if self.last_stderr else ""
+            raise LaunchAgentError(f"could not bootstrap LaunchAgent{detail}")
 
     def bootout(self) -> None:
         if not self._call("bootout", self.spec.target):
