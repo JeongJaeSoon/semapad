@@ -428,3 +428,27 @@ def test_daemon_lock_rejects_a_second_instance(tmp_path):
         assert cli._cmd_daemon(paths) == 1   # exits before touching hardware
     finally:
         holder.close()
+
+
+def test_install_hardens_preexisting_0755_runtime_and_logs(tmp_path):
+    """Manual nohup runs create runtime/ and logs/ with the default umask;
+    install must tighten them in place, not reject the setup."""
+    import os
+
+    from semapad import launch_agent
+    home = tmp_path / ".semapad"
+    for sub in ("runtime", "logs"):
+        (home / sub).mkdir(parents=True)
+        os.chmod(home / sub, 0o755)
+    os.chmod(home, 0o755)
+    spec = launch_agent.build_spec(
+        command_prefix=(str(tmp_path / "venv" / "python"), "-m", "semapad.cli"),
+        runtime_home=home,
+        log_path=home / "logs" / "daemon.log",
+        runtime_environment={"SEMAPAD_HOME": home},
+        account_home=tmp_path,
+        uid=os.getuid(),
+    )
+    launch_agent._ensure_runtime_directories(spec)
+    for path in (home, home / "runtime", home / "logs"):
+        assert (os.lstat(path).st_mode & 0o777) == 0o700
