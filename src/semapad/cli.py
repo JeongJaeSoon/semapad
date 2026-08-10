@@ -334,6 +334,24 @@ def _cmd_ui(paths: Paths, port: int, open_browser: bool) -> int:
     return 0
 
 
+def _stable_interpreter() -> str:
+    """Prefer Homebrew's version-stable opt path over the Cellar path.
+
+    Under brew, sys.executable lives in Cellar/semapad/<version>/ -- a path
+    that vanishes on `brew upgrade`, silently breaking the LaunchAgent at the
+    next login. The opt/ symlink survives upgrades.
+    """
+    import re
+
+    executable = sys.executable
+    match = re.match(r"^(.*)/Cellar/([^/]+)/[^/]+/(.*)$", executable)
+    if match:
+        candidate = Path(f"{match.group(1)}/opt/{match.group(2)}/{match.group(3)}")
+        if candidate.exists():
+            return str(candidate)
+    return executable
+
+
 def _cmd_autostart(paths: Paths, action: str, stdout=None) -> int:
     import subprocess
 
@@ -341,7 +359,7 @@ def _cmd_autostart(paths: Paths, action: str, stdout=None) -> int:
 
     stdout = sys.stdout if stdout is None else stdout
     spec = launch_agent.build_spec(
-        command_prefix=(sys.executable, "-m", "semapad.cli"),
+        command_prefix=(_stable_interpreter(), "-m", "semapad.cli"),
         runtime_home=paths.home,
         log_path=paths.home / "logs" / "daemon.log",
         runtime_environment={"SEMAPAD_HOME": paths.home},
