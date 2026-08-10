@@ -237,7 +237,7 @@ class Daemon:
         self.last_status_at = now
         self._set_pad_error(None)
         self._cause("status")
-        self._next_status_due = now + max(0.001, self.cfg.status_poll_ms / 1000.0)
+        self._next_status_due = now + self._status_poll_seconds()
         self._needs_reconnect = False
         self._retry_seconds = 1.0
         self._next_retry_due = now
@@ -268,8 +268,13 @@ class Daemon:
             self._invalidate_pad(reconnect=False, now=now,
                                  error_code="status_unverified",
                                  clear_status=False)
-            self._next_status_due = now + max(0.001,
-                                              self.cfg.status_poll_ms / 1000.0)
+            self._next_status_due = now + self._status_poll_seconds()
+
+    def _status_poll_seconds(self) -> float:
+        base = max(0.001, self.cfg.status_poll_ms / 1000.0)
+        if getattr(self.pad, "transport", "") == "BLE":
+            return base * 5   # each poll is airtime the input shares (#49)
+        return base
 
     def _apply_exclusive(self, now: float) -> None:
         """Reopen the device seized while Claude owns it (spec: #41/#19).
@@ -517,6 +522,8 @@ class Daemon:
         self._stage_ms["view"] = round((time_mod.perf_counter() - t0) * 1000, 1)
         self._apply_exclusive(now)
         self._ensure_pad(now)
+        self.compositor.ble = \
+            getattr(self.pad, "transport", "") == "BLE"
 
         if self.pad is not None and self._verified_epoch is not None:
             try:

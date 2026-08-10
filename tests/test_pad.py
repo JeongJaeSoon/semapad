@@ -933,3 +933,85 @@ def test_poll_received_returns_early_when_input_arrives():
     messages = device.poll_received(5.0)
     assert [m.message.get("m") for m in messages] == ["v.oai.hid"]
     assert backend.clock.now - started < 0.2   # one quantum, not 5 s
+
+
+# --- BLE async writer (#49) --------------------------------------------------
+
+class AsyncFakeBackend(FakeBackend):
+    supports_async_report = True
+
+    def __init__(self, raw_transport: str = "BLE") -> None:
+        super().__init__(raw_transport)
+        self.async_writes: list[tuple[bytes, object]] = []
+        self.async_rc = 0
+
+    def set_report_async(self, device, report_type, report_id, packet, on_done):
+        if self.async_rc == 0:
+            self.async_writes.append((bytes(packet), on_done))
+        return self.async_rc
+
+    def complete_next(self, result: int = 0) -> None:
+        packet, on_done = self.async_writes.pop(0)
+        if result == 0:
+            for message in self._write_decoder.feed(packet):
+                self.sent_messages.append(message)
+        on_done(result)
+
+
+def test_ble_send_queues_async_and_completions_drain_in_order():
+    device, backend = open_fake(AsyncFakeBackend())
+    message = protocol.thstatus([0xFFFFFF] * 6)
+    expected = list(protocol.frame(message, device.transport))
+    device.send(message)
+    assert backend.writes == []              # nothing on the blocking path
+    assert len(backend.async_writes) == 1    # exactly one report in flight
+    drained = []
+    while backend.async_writes:
+        drained.append(backend.async_writes[0][0])
+        backend.complete_next()
+    assert drained == expected
+    assert backend.sent_messages[-1]["m"] == "v.oai.thstatus"
+
+
+def test_ble_newest_thstatus_supersedes_a_queued_one():
+    device, backend = open_fake(AsyncFakeBackend())
+    first = protocol.thstatus([0x111111] * 6)
+    stale = protocol.thstatus([0x222222] * 6)
+    newest = protocol.thstatus([0x333333] * 6)
+    border = protocol.rgbcfg(ambient=(0xFF6D00, "solid"))
+    device.send(first)                       # in flight
+    device.send(stale)                       # queued
+    device.send(border)                      # queued, different zone
+    device.send(newest)                      # replaces stale, keeps border
+    while backend.async_writes:
+        backend.complete_next()
+    sent = [m for m in backend.sent_messages if m["m"] == "v.oai.thstatus"]
+    assert [m["p"][0]["c"] for m in sent] == [0x111111, 0x333333]
+    assert any(m["m"] == "v.oai.rgbcfg" for m in backend.sent_messages)
+
+
+def test_ble_completion_error_surfaces_on_next_poll():
+    device, backend = open_fake(AsyncFakeBackend())
+    device.send(protocol.rgbcfg(ambient=None))
+    backend.complete_next(result=0xE00002ED)
+    with pytest.raises(pad.PadError):
+        device.poll_received(0.0)
+
+
+def test_ble_unsupported_submit_falls_back_to_sync_permanently():
+    backend = AsyncFakeBackend()
+    backend.async_rc = 0xE00002C7            # kIOReturnUnsupported
+    backend.auto_status = True
+    device, _ = open_fake(backend)
+    with pytest.raises(pad.PadIOError):
+        device.send(protocol.rgbcfg(ambient=None))
+    assert device.reconnect(timeout=1.0)     # daemon would reconnect
+    device.send(protocol.rgbcfg(ambient=None))
+    assert backend.writes                    # synchronous path from now on
+    assert backend.async_writes == []
+
+
+def test_usb_send_stays_synchronous_even_with_async_backend():
+    device, backend = open_fake(AsyncFakeBackend(raw_transport="USB"))
+    device.send(protocol.rgbcfg(ambient=None))
+    assert backend.writes and backend.async_writes == []
