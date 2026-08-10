@@ -153,3 +153,26 @@ def test_uninstall_hooks_when_none_is_a_noop(tmp_path: Path):
     code = cli.uninstall_hooks(p, out, err)
     assert code == 0 and "no hooks installed" in out.getvalue()
     assert json.loads(p.claude_settings.read_text()) == {"model": "opus"}
+
+
+def test_stable_interpreter_prefers_brew_opt_path(tmp_path: Path, monkeypatch):
+    import sys as sys_mod
+
+    cellar = tmp_path / "Cellar" / "semapad" / "0.1.2" / "libexec" / "bin"
+    opt = tmp_path / "opt" / "semapad" / "libexec" / "bin"
+    cellar.mkdir(parents=True)
+    opt.mkdir(parents=True)
+    (cellar / "python").write_text("")
+    (opt / "python").write_text("")
+    monkeypatch.setattr(sys_mod, "executable", str(cellar / "python"))
+    assert cli._stable_interpreter() == str(opt / "python")
+
+
+def test_stable_interpreter_keeps_non_brew_paths(tmp_path: Path, monkeypatch):
+    import sys as sys_mod
+
+    venv = tmp_path / "project" / ".venv" / "bin" / "python"
+    venv.parent.mkdir(parents=True)
+    venv.write_text("")
+    monkeypatch.setattr(sys_mod, "executable", str(venv))
+    assert cli._stable_interpreter() == str(venv)
