@@ -56,10 +56,11 @@ class Outcome:
 
 
 def parse(message: object) -> Press | None | str:
-    """Return a Press, ``None`` for non-input messages, or ``"invalid"``.
+    """Return a Press, ``None``, ``"release"``, or ``"invalid"``.
 
-    ``"invalid"`` means the message claimed to be HID input but did not carry a
-    valid A-key press (unknown key, release-only, malformed params).
+    A release (act 0 on a known key) is expected traffic, not noise: it must
+    never overwrite the last meaningful press in the ui, so it gets its own
+    disposition instead of "invalid".
     """
     if not isinstance(message, dict) or message.get("m") != "v.oai.hid":
         return None
@@ -67,7 +68,11 @@ def parse(message: object) -> Press | None | str:
     key = params.get("k") if isinstance(params, dict) else None
     action = params.get("act") if isinstance(params, dict) else None
     index = KEY_NAMES.get(key) if type(key) is str else None
-    if index is None or action != 1 or isinstance(action, bool):
+    if index is None or isinstance(action, bool):
+        return "invalid"
+    if action == 0:
+        return "release"
+    if action != 1:
         return "invalid"
     return Press(key_index=index)
 

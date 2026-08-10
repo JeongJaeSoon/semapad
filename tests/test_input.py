@@ -29,11 +29,17 @@ def test_parse_non_input_messages_are_none():
 
 
 @pytest.mark.parametrize("message", [
-    hid(key="AG09"), hid(key="XX00"), hid(act=0), hid(act="1"), hid(act=True),
+    hid(key="AG09"), hid(key="XX00"), hid(act="1"), hid(act=True),
     {"m": "v.oai.hid"}, {"m": "v.oai.hid", "p": []},
 ])
 def test_parse_rejects_invalid_input_shapes(message):
     assert parse(message) == "invalid"
+
+
+def test_parse_release_is_its_own_disposition():
+    """A release must never be classified as noise: the daemon drops it
+    silently so it cannot overwrite the last meaningful press in the ui."""
+    assert parse(hid(act=0)) == "release"
 
 
 def test_parse_valid_press():
