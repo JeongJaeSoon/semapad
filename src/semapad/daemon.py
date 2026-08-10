@@ -116,6 +116,9 @@ class Daemon:
 
     def _set_pad_error(self, code: str | None, *, clear_status: bool = False) -> None:
         changed = code != self.pad_error_code
+        if code != self.pad_error_code:
+            self._log_event("pad_error", code=code,
+                            transport=getattr(self.pad, "transport", None))
         self.pad_error_code = code
         if clear_status and self.last_status_at is not None:
             self.last_status_at = None
