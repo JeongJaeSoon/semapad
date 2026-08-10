@@ -321,8 +321,18 @@ def _cmd_ui(paths: Paths, port: int, open_browser: bool) -> int:
                           sessions_dir=paths.sessions_dir,
                           config_path=paths.config_path,
                           daemon_snapshot_path=paths.snapshot_path)
-    server = make_server(dashboard, port)
     url = f"http://127.0.0.1:{port}"
+    try:
+        server = make_server(dashboard, port)
+    except OSError as error:
+        import errno
+        if error.errno == errno.EADDRINUSE:
+            print(f"semapad: port {port} is already in use -- the dashboard is"
+                  f" probably already running at {url}\n"
+                  f"        (another port: semapad ui --port {port + 1})",
+                  file=sys.stderr)
+            return 1
+        raise
     print(f"semapad ui: {url}")
     if open_browser:
         webbrowser.open(url)

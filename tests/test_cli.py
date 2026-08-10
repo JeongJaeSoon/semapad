@@ -176,3 +176,19 @@ def test_stable_interpreter_keeps_non_brew_paths(tmp_path: Path, monkeypatch):
     venv.write_text("")
     monkeypatch.setattr(sys_mod, "executable", str(venv))
     assert cli._stable_interpreter() == str(venv)
+
+
+def test_ui_port_in_use_prints_help_not_a_traceback(tmp_path: Path, capsys, monkeypatch):
+    import errno
+
+    from semapad import cli
+
+    def busy(dashboard, port):
+        raise OSError(errno.EADDRINUSE, "Address already in use")
+
+    monkeypatch.setattr("semapad.web.server.make_server", busy)
+    p = paths(tmp_path)
+    code = cli._cmd_ui(p, 8642, open_browser=False)
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "already in use" in err and "--port" in err
