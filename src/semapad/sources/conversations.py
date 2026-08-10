@@ -27,8 +27,12 @@ class Conversation:
     #: 0.0 when Desktop has not recorded a focus yet -- the unread
     #: approximation (spec §5) then stays off rather than guessing.
     last_focused_at: float
-    #: No pin field exists in the mapping files as of 2026-08-10 (132-file field
-    #: union). Spec §11.7: read it when the Phase 1 pin/unpin diff reveals one.
+    #: Pin state is NOT in the mapping files -- settled by the 2026-08-10
+    #: pin/unpin toggle experiment: pinning added no field, unpinning left
+    #: autoArchiveExempt=true behind (that flag is not pin). It lives in the
+    #: app's LevelDB, which spec principles rule out. Hardwired False until
+    #: Desktop ever exposes it in these files (then: selection priority,
+    #: spec §11.7).
     pinned: bool
 
 
