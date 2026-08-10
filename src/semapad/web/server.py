@@ -285,7 +285,7 @@ const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰�
 function esc(s){ const d=document.createElement('span'); d.textContent=s??'';
                  return d.innerHTML; }
 function dot(color){ return `<span class="dot" style="background:${color??'#000'}"></span>`; }
-const ICON_USB = `<svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V7"/><path d="M12 7l-3 3"/><path d="M12 7l3-3"/><circle cx="12" cy="21" r="1.6" fill="currentColor" stroke="none"/><path d="M8 12H5v-2"/><path d="M8 12l4 3"/><rect x="15" y="8" width="3" height="3" transform="rotate(0 16.5 9.5)"/><path d="M16.5 11l-4.5 4"/></svg>`;
+const ICON_USB = `<svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V6"/><path d="M12 3l-2 3.4h4L12 3z" fill="currentColor" stroke="none"/><path d="M12 15l-4.4-2.2V9.6"/><path d="M12 18l4.4-2.2v-3"/><rect x="6.2" y="7.2" width="2.8" height="2.8" fill="currentColor" stroke="none"/><circle cx="16.4" cy="11.2" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="21" r="1.7" fill="currentColor" stroke="none"/></svg>`;
 const ICON_BT = `<svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></svg>`;
 function ago(sec){ if(!sec) return '-'; const d=Date.now()/1000-sec;
   if(d<60) return Math.round(d)+'s 전'; if(d<3600) return Math.round(d/60)+'m 전';
@@ -327,13 +327,16 @@ function renderDevice(d){
     (d.frontmost.owner ? `<b>${esc(d.frontmost.owner)}</b>` : '유지(규칙 불일치)'),
     `frontmost: ${esc(d.frontmost.bundle_id ?? 'n/a')}` +
     (d.frontmost.error ? ` — <span class="err">${esc(d.frontmost.error)}</span>` : ''));
-  rows += deviceRow('패드 동기화',
-    d.source === 'daemon' ? '<span class="ok">화면 = 패드 ✓</span>'
-                          : '<span class="warn">데몬 미실행 — 화면만 계산 중</span>',
-    (d.source === 'daemon'
-      ? '이 화면은 패드를 칠하는 데몬의 계산 결과를 그대로 그립니다'
-      : '패드는 지금 아무도 칠하고 있지 않습니다') +
-    (d.config_pending ? ' · <span class="warn">설정 저장됨 — 반영 대기 중</span>' : ''));
+  if (d.source !== 'daemon')
+    rows += deviceRow('<span class="warn">데몬 미실행</span>',
+      '<span class="warn">패드가 꺼져 있거나 멈춰 있습니다</span>',
+      '`semapad autostart install` 또는 `semapad daemon`으로 시작하세요');
+  if (d.version && d.ui_version && d.ui_version !== d.version)
+    rows += deviceRow('<span class="warn">버전 불일치</span>',
+      `데몬 v${esc(d.version)} · 화면 v${esc(d.ui_version)}`,
+      '화면(semapad ui)을 다시 시작하면 맞춰집니다');
+  if (d.config_pending)
+    rows += deviceRow('<span class="warn">설정 반영 대기</span>', '저장됨 — 곧 적용됩니다');
   const linked = d.conversations.filter(c => c.process_alive).length;
   rows += deviceRow('실행 중 세션',
     `대화와 연결 ${linked} / 전체 ${d.processes.count}` +
@@ -382,12 +385,7 @@ function renderPad(d){
 
 function render(d){
   const ver = document.getElementById('ver');
-  if (d.version){
-    ver.textContent = 'v' + d.version;
-    if (d.ui_version && d.ui_version !== d.version)
-      ver.innerHTML = `v${esc(d.version)} <span class="warn">(화면은 v${esc(d.ui_version)} —
-        데몬과 버전이 다릅니다. semapad autostart install로 데몬을 재시작하세요)</span>`;
-  }
+  if (d.version) ver.textContent = 'v' + d.version;
   if (SAVE_WATCH && !d.config_pending){
     SAVE_WATCH = false;
     const msg = document.getElementById('cfgmsg');
