@@ -70,6 +70,9 @@ class Daemon:
         self.frontmost_id: str | None = None
         self.view: view_module.View | None = None
         self.last_input_result: str | None = None
+        self.last_input: dict | None = None   # {key, result, at} for the ui
+        self._events_path = (state_dir.parent / "logs" / "events.jsonl"
+                             if state_dir is not None else None)
         self.pad_error_code: str | None = None
         self.last_status_at: float | None = None
         self.causes: tuple[str, ...] = ()
@@ -184,6 +187,7 @@ class Daemon:
             self.frontmost_ok, self.frontmost_id = True, bundle_id
             new_owner = owner_for(bundle_id, self.owner, self.cfg)
         if new_owner != self.owner:
+            self._log_event("owner", from_=self.owner, to=new_owner)
             self.owner = new_owner
             self.compositor.mark_dirty()
             self._cause("owner")
@@ -300,6 +304,23 @@ class Daemon:
                 and self._verified_epoch == getattr(current, "epoch", None)
                 and self._verified_layer == 1)
 
+    def _log_event(self, kind: str, **fields: object) -> None:
+        """Append one analysis line; logging must never break the daemon.
+
+        Local-only operational log (0600 dir). Carries ids, never titles.
+        """
+        if self._events_path is None:
+            return
+        try:
+            import json as json_mod
+            import time as time_mod
+            self._events_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {"ts": round(time_mod.time(), 3), "event": kind, **fields}
+            with open(self._events_path, "a") as handle:
+                handle.write(json_mod.dumps(record) + "\n")
+        except Exception:
+            pass
+
     # --- input & messages ---------------------------------------------------
 
     def _finish_input(self, outcome: input_module.Outcome, now: float) -> None:
@@ -330,6 +351,7 @@ class Daemon:
                 continue
             if parsed == "invalid":
                 self._finish_input(input_module.Outcome("ignored_input"), now)
+                self._log_event("input", key=None, result="ignored_input")
                 continue
             # Re-read ownership at dispatch time; an app switch must close the
             # gate before a press can open a conversation.
@@ -338,6 +360,14 @@ class Daemon:
                 parsed, now, owner=self.owner, layer_one=self._gate_layer_one(),
                 slots=self._prev_slots or (None,) * view_module.KEY_COUNT)
             self._finish_input(outcome, now)
+            self.last_input = {"key": parsed.key_index,
+                               "result": outcome.result, "at": now}
+            slots = self._prev_slots or ()
+            self._log_event(
+                "input", key=parsed.key_index, result=outcome.result,
+                owner=self.owner,
+                local_id=(slots[parsed.key_index]
+                          if parsed.key_index < len(slots) else None))
 
     # --- snapshot (spec §5.1: consumers draw finished values) ---------------
 
@@ -354,6 +384,7 @@ class Daemon:
             "status_verified": self._verified_epoch is not None,
             "pad_error_code": self.pad_error_code,
             "last_input_result": self.last_input_result,
+            "last_input": self.last_input,
             "note": None,
         }
         snap["frontmost"] = {"bundle_id": self.frontmost_id,

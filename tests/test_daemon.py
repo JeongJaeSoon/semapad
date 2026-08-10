@@ -334,3 +334,25 @@ def test_pad_factory_none_retries_with_backoff(tmp_path):
     assert calls["n"] == 1
     daemon.tick(1.5)                     # past backoff
     assert calls["n"] == 2
+
+
+def test_press_records_last_input_and_event_log(tmp_path):
+    cli = str(uuid.uuid4())
+    lid = _conversation(tmp_path / "mapping", cli)
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    pad.push(hid("AG00"))
+    daemon.tick(2.0)
+
+    snap = json.loads((tmp_path / "runtime" / "snapshot.json").read_text())
+    li = snap["device"]["last_input"]
+    assert li["key"] == 0 and li["result"] == "opened" and li["at"] == 2.0
+
+    lines = [json.loads(l) for l in
+             (tmp_path / "logs" / "events.jsonl").read_text().splitlines()]
+    inputs = [l for l in lines if l["event"] == "input"]
+    assert inputs[-1]["key"] == 0
+    assert inputs[-1]["result"] == "opened"
+    assert inputs[-1]["local_id"] == lid
+    assert "title" not in json.dumps(lines)   # ids only, never titles
