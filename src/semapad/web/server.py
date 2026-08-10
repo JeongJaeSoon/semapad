@@ -100,8 +100,9 @@ class Dashboard:
                 from_daemon.get("config_fingerprint") != self._config_fingerprint())
             return from_daemon
         cfg, warnings = config_mod.load(self._config_path)
-        convs, conv_diags = conversations.scan(self._mapping_dir)
-        convs = self._debounce.apply(convs, prev_slots=self._prev)
+        convs, archived_ids, conv_diags = conversations.scan(self._mapping_dir)
+        convs = self._debounce.apply(convs, prev_slots=self._prev,
+                                     archived=archived_ids)
         proc_snapshot = processes.scan(self._sessions_dir)
         records = hooks.read_all(self._state_dir)
 
@@ -245,6 +246,7 @@ button { background:#111; color:#fff; border:0; border-radius:10px;
 
 <script>
 const TOKEN = "%TOKEN%";
+let SAVE_WATCH = false;
 </script>
 <script>
 const HEX = c => c === null || c === undefined ? null
@@ -331,6 +333,12 @@ function renderPad(d){
 }
 
 function render(d){
+  if (SAVE_WATCH && !d.config_pending){
+    SAVE_WATCH = false;
+    const msg = document.getElementById('cfgmsg');
+    msg.textContent = '반영 완료 ✓'; msg.className = 'ok';
+    setTimeout(() => { if (!SAVE_WATCH) msg.textContent = ''; }, 4000);
+  }
   renderDevice(d);
   renderPad(d);
 
@@ -407,7 +415,10 @@ async function saveConfig(ev){
   const r = await fetch('/config', {method: 'POST',
     headers: {'X-Semapad-Token': TOKEN, 'Content-Type': 'application/json'},
     body: JSON.stringify(edits)});
-  if (r.ok){ msg.textContent = '저장됨 — 다음 폴링에 반영'; msg.className = 'ok'; }
+  if (r.ok){
+    msg.textContent = '저장됨 — 반영 대기 중…'; msg.className = 'warn';
+    SAVE_WATCH = true;
+  }
   else {
     const body = await r.json();
     msg.textContent = '저장 실패'; msg.className = 'err';

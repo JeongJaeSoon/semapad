@@ -42,13 +42,20 @@ def _seconds(value: object) -> float:
     return float(value) / 1000.0
 
 
-def scan(root: Path | None = None) -> tuple[tuple[Conversation, ...], tuple[str, ...]]:
-    """Return (non-archived conversations, diagnostics), newest data as-is."""
+def scan(root: Path | None = None) -> tuple[tuple[Conversation, ...], frozenset[str], tuple[str, ...]]:
+    """Return (non-archived conversations, archived local_ids, diagnostics).
+
+    Archived ids are the *provable* departures: the file still reads fine and
+    says ``isArchived: true``. The departure debouncer must not hold those --
+    archive compaction is the one key movement the user asked to be instant
+    (spec §5), while a missing/unreadable file stays debounced (#9).
+    """
     root = deeplink.MAPPING_ROOT if root is None else root
     if not root.is_dir():
-        return (), ("mapping directory missing",)
+        return (), frozenset(), ("mapping directory missing",)
 
     out: list[Conversation] = []
+    archived_ids: set[str] = set()
     diags: list[str] = []
     for path in sorted(root.glob(deeplink.MAPPING_GLOB), key=str):
         name = path.name
@@ -72,6 +79,7 @@ def scan(root: Path | None = None) -> tuple[tuple[Conversation, ...], tuple[str,
             continue
         archived = raw.get("isArchived")
         if archived is True:
+            archived_ids.add(local_id)
             continue
         if archived is not False:
             diags.append(f"{name}: isArchived missing, not provably on the sidebar")
@@ -92,4 +100,4 @@ def scan(root: Path | None = None) -> tuple[tuple[Conversation, ...], tuple[str,
             last_focused_at=_seconds(raw.get("lastFocusedAt")),
             pinned=False,
         ))
-    return tuple(out), tuple(diags)
+    return tuple(out), frozenset(archived_ids), tuple(diags)

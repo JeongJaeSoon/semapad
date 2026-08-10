@@ -14,11 +14,11 @@ SLOTS = ("local_a", "local_b", None, None, None, None)
 
 
 def router(opened: list | None = None, ok: bool = True) -> KeyRouter:
-    def opener(local_id: str, *, foreground: bool) -> bool:
+    def opener(local_id: str) -> bool:
         if opened is not None:
-            opened.append((local_id, foreground))
+            opened.append(local_id)
         return ok
-    return KeyRouter(opener, double_tap_seconds=0.35)
+    return KeyRouter(opener)
 
 
 # --- parse -------------------------------------------------------------------
@@ -57,54 +57,42 @@ def test_empty_slot_gives_feedback():
     assert outcome == Outcome("empty_slot", feedback=True, press_seen=True)
 
 
-# --- tap semantics (spec §9: vendor style) ----------------------------------
+# --- tap dispatch (single action: open immediately, foreground) --------------
+# The vendor's background/double-tap split was dropped after acceptance
+# (2026-08-10): claude:// makes Desktop raise itself, so the 350 ms tap window
+# was pure lag. Distinguishing taps again is semapad#12.
 
-def test_single_tap_opens_in_background_after_window():
+def test_press_opens_immediately():
     opened: list = []
     r = router(opened)
     outcome = r.dispatch(Press(0), 10.0, owner="claude", layer_one=True,
                          slots=SLOTS)
-    assert outcome.result == "pending" and outcome.press_seen
-    assert r.flush(10.2) is None                     # window still open
-    flushed = r.flush(10.4)
-    assert flushed == Outcome("opened_background")
-    assert opened == [("local_a", False)]
+    assert outcome == Outcome("opened", press_seen=True)
+    assert opened == ["local_a"]
 
 
-def test_double_tap_opens_foreground_immediately():
+def test_two_presses_open_twice_without_any_window():
     opened: list = []
     r = router(opened)
     r.dispatch(Press(0), 10.0, owner="claude", layer_one=True, slots=SLOTS)
-    outcome = r.dispatch(Press(0), 10.2, owner="claude", layer_one=True,
-                         slots=SLOTS)
-    assert outcome.result == "opened_foreground" and outcome.press_seen
-    assert opened == [("local_a", True)]
-    assert r.flush(11.0) is None                     # nothing left pending
-
-
-def test_press_on_another_key_replaces_the_pending_tap():
-    opened: list = []
-    r = router(opened)
-    r.dispatch(Press(0), 10.0, owner="claude", layer_one=True, slots=SLOTS)
-    outcome = r.dispatch(Press(1), 10.1, owner="claude", layer_one=True,
-                         slots=SLOTS)
-    assert outcome.result == "pending"
-    assert r.flush(10.5) == Outcome("opened_background")
-    assert opened == [("local_b", False)]            # only the newer key
+    r.dispatch(Press(1), 10.1, owner="claude", layer_one=True, slots=SLOTS)
+    assert opened == ["local_a", "local_b"]
 
 
 def test_open_failure_gives_feedback():
     r = router(ok=False)
-    r.dispatch(Press(0), 10.0, owner="claude", layer_one=True, slots=SLOTS)
-    assert r.flush(10.4) == Outcome("open_failed", feedback=True)
+    outcome = r.dispatch(Press(0), 10.0, owner="claude", layer_one=True,
+                         slots=SLOTS)
+    assert outcome == Outcome("open_failed", feedback=True, press_seen=True)
 
 
 def test_opener_exception_is_a_failed_open():
-    def boom(local_id: str, *, foreground: bool) -> bool:
+    def boom(local_id: str) -> bool:
         raise RuntimeError("no")
     r = KeyRouter(boom)
-    r.dispatch(Press(0), 10.0, owner="claude", layer_one=True, slots=SLOTS)
-    assert r.flush(10.4) == Outcome("open_failed", feedback=True)
+    outcome = r.dispatch(Press(0), 10.0, owner="claude", layer_one=True,
+                         slots=SLOTS)
+    assert outcome == Outcome("open_failed", feedback=True, press_seen=True)
 
 
 # --- open_local --------------------------------------------------------------
@@ -120,12 +108,9 @@ def test_open_local_builds_the_epitaxy_route():
         return Done()
 
     lid = "local_00000000-0000-4000-8000-000000000000"
-    assert input_module.open_local(lid, foreground=False, runner=runner)
-    assert calls == [["/usr/bin/open", "-g",
-                      f"claude://claude.ai/epitaxy/{lid}"]]
-    assert input_module.open_local(lid, foreground=True, runner=runner)
-    assert calls[1][1] != "-g"
+    assert input_module.open_local(lid, runner=runner)
+    assert calls == [["/usr/bin/open", f"claude://claude.ai/epitaxy/{lid}"]]
 
 
 def test_open_local_refuses_invalid_ids():
-    assert input_module.open_local("not-a-local-id", foreground=True) is False
+    assert input_module.open_local("not-a-local-id") is False
