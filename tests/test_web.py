@@ -229,3 +229,48 @@ def test_transient_unreadable_mapping_does_not_move_keys(tmp_path: Path):
 
     assert during == before
     assert after == before
+
+
+def test_data_long_poll_returns_when_the_snapshot_advances(tmp_path: Path):
+    """/data?since=N holds until the daemon writes a newer snapshot, so a key
+    press reaches the page within one daemon tick, not one browser poll."""
+    import threading
+    import time as time_mod
+    import urllib.request
+
+    from semapad import view as view_module
+    from semapad.web import server as server_module
+
+    snap_path = tmp_path / "runtime" / "snapshot.json"
+    snap_path.parent.mkdir(parents=True)
+    base = {"schema": view_module.SNAPSHOT_SCHEMA, "generated_at": 100.0,
+            "slots": [], "conversations": [], "palette": {}, "alert": "normal",
+            "diagnostics": [], "config_fingerprint": "x",
+            "device": {}, "frontmost": {}, "processes": {"count": 0,
+            "authoritative": True, "diagnostics": []},
+            "config": {"warnings": []}}
+    snap_path.write_text(json.dumps(base))
+
+    dash = _dashboard(tmp_path, daemon_snapshot_path=snap_path,
+                      clock=lambda: 101.0)
+    dash.DAEMON_SNAPSHOT_FRESH_SECONDS = 1e9   # keep the fixture snapshot fresh
+    server = make_server(dash, port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        def advance():
+            time_mod.sleep(0.3)
+            newer = dict(base, generated_at=100.5)
+            snap_path.write_text(json.dumps(newer))
+        threading.Thread(target=advance, daemon=True).start()
+
+        started = time_mod.time()
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/data?since=100.0", timeout=10) as r:
+            payload = json.loads(r.read())
+        waited = time_mod.time() - started
+        assert payload["generated_at"] == 100.5
+        assert 0.2 < waited < 5.0          # held, then released promptly
+    finally:
+        server.shutdown()
+        server.server_close()
