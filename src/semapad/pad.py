@@ -29,6 +29,9 @@ from semapad import protocol
 
 VID, PID, REPORT_ID = 0x303A, 0x8360, 6
 _ASYNC_WRITE_TIMEOUT_SECONDS = 3.0
+#: A completion older than this never arrived (observed live on BLE
+#: during the vendor's ownership-flip write burst): reconnect recovers.
+_ASYNC_WRITE_WATCHDOG_SECONDS = 6.0
 _KIO_UNSUPPORTED = 0xE00002C7
 #: Frames whose newest version fully supersedes a queued older one.
 _COALESCE_METHODS = frozenset({"v.oai.thstatus", "v.oai.rgbcfg"})
@@ -596,6 +599,7 @@ class Pad:
         self._write_frames: "deque[tuple[object, list[bytes]]]" = deque()
         self._write_inflight: list[bytes] | None = None
         self._write_index = 0
+        self._write_submitted_at = 0.0
         self._async_send_broken = False
 
         # Explicit aliases make the callback/buffer/run-loop lifetime visible
@@ -762,7 +766,19 @@ class Pad:
         if self._callback_error is not None:
             raise self._callback_error
 
+    def _check_write_watchdog(self) -> None:
+        """A lost completion would wedge the queue forever; declare it dead."""
+        if self._write_inflight is None or self._callback_error is not None:
+            return
+        if self._clock() - self._write_submitted_at \
+                > _ASYNC_WRITE_WATCHDOG_SECONDS:
+            self._drop_pending_writes()
+            self._invalidate_status()
+            self._callback_error = PadError(
+                "async write completion lost (watchdog)")
+
     def _ensure_writable(self) -> None:
+        self._check_write_watchdog()
         self._raise_callback_error()
         if not self.connected or self._device is None:
             raise PadDisconnected("Codex Micro is disconnected")
@@ -817,6 +833,7 @@ class Pad:
                     self._device, _OUTPUT_REPORT, REPORT_ID, packet,
                     lambda rc, _epoch=epoch: self._write_completed(_epoch, rc))
                 if result == 0:
+                    self._write_submitted_at = self._clock()
                     return
                 if result == _KIO_UNSUPPORTED:
                     self._async_send_broken = True
@@ -909,6 +926,7 @@ class Pad:
         if seconds < 0:
             raise ValueError("seconds must be non-negative")
         self._drain_reports()
+        self._check_write_watchdog()
         self._raise_callback_error()
         self._pump_for(
             seconds, stop_on_disconnect=True, surface_callback_error=True,
