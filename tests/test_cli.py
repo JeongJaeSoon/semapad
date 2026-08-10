@@ -125,3 +125,31 @@ def test_cmd_hook_writes_record(tmp_path: Path, monkeypatch):
     (record,) = hooks.read_all(p.state_dir)
     assert record.session_id == "abc"
     assert record.state.value == "done"
+
+
+def test_uninstall_hooks_removes_only_owned_entries(tmp_path: Path):
+    p = paths(tmp_path)
+    foreign = {"hooks": [{"type": "command",
+                          "command": "bash $HOME/.claude/hooks/auto-fmt.sh"}]}
+    _install(p)
+    settings = json.loads(p.claude_settings.read_text())
+    settings["hooks"]["Stop"].insert(0, foreign)
+    p.claude_settings.write_text(json.dumps(settings))
+
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    code = cli.uninstall_hooks(p, out, err)
+    assert code == 0 and "removed 11" in out.getvalue()
+    after = json.loads(p.claude_settings.read_text())
+    assert after["hooks"] == {"Stop": [foreign]}    # foreign hook survives
+    assert "-m semapad.cli hook" not in json.dumps(after)
+
+
+def test_uninstall_hooks_when_none_is_a_noop(tmp_path: Path):
+    p = paths(tmp_path)
+    p.claude_settings.write_text(json.dumps({"model": "opus"}))
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    code = cli.uninstall_hooks(p, out, err)
+    assert code == 0 and "no hooks installed" in out.getvalue()
+    assert json.loads(p.claude_settings.read_text()) == {"model": "opus"}

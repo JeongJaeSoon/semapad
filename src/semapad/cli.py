@@ -215,6 +215,44 @@ def install_hooks(paths: Paths, stdout: TextIO, stderr: TextIO) -> int:
     return 0
 
 
+def uninstall_hooks(paths: Paths, stdout: TextIO, stderr: TextIO) -> int:
+    """Remove exactly the entries install_hooks owns; foreign hooks stay."""
+    try:
+        settings = _read_settings(paths.claude_settings)
+        existing_hooks = settings.get("hooks")
+        if type(existing_hooks) is not dict:
+            print("semapad: no hooks installed", file=stdout)
+            return 0
+        removed = 0
+        merged = {}
+        for event, entries in existing_hooks.items():
+            if type(entries) is not list:
+                merged[event] = entries
+                continue
+            kept = [e for e in entries if not _owned_entry(e)]
+            removed += len(entries) - len(kept)
+            if kept:
+                merged[event] = kept
+        if not removed:
+            print("semapad: no hooks installed", file=stdout)
+            return 0
+        updated = dict(settings)
+        if merged:
+            updated["hooks"] = merged
+        else:
+            updated.pop("hooks", None)
+        backup = paths.claude_settings.with_name(
+            paths.claude_settings.name + ".semapad.bak")
+        backup.write_bytes(paths.claude_settings.read_bytes())
+        _atomic_write_json(paths.claude_settings, updated)
+    except (OSError, SettingsError) as error:
+        print(f"semapad: hooks were not removed; settings are unchanged "
+              f"({error})", file=stderr)
+        return 1
+    print(f"semapad: removed {removed} hook entries", file=stdout)
+    return 0
+
+
 # --- commands ----------------------------------------------------------------
 
 def _cmd_hook(paths: Paths) -> int:
@@ -363,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("hook", help="consume one Claude hook event from stdin")
     sub.add_parser("install-hooks",
                    help="install Claude hooks, claiming old paneglow entries")
+    sub.add_parser("uninstall-hooks",
+                   help="remove semapad's Claude hooks, leaving others intact")
     sub.add_parser("daemon", help="run the pad daemon in the foreground")
     autostart = sub.add_parser("autostart", help="manage the login LaunchAgent")
     autostart.add_argument("action", choices=["install", "uninstall", "status"])
@@ -377,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_autostart(paths, args.action)
     if args.command == "install-hooks":
         return install_hooks(paths, sys.stdout, sys.stderr)
+    if args.command == "uninstall-hooks":
+        return uninstall_hooks(paths, sys.stdout, sys.stderr)
     if args.command == "ui":
         from semapad.web.server import DEFAULT_PORT
         port = args.port if args.port is not None else DEFAULT_PORT
