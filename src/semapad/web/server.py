@@ -46,6 +46,7 @@ class Dashboard:
         self._frontmost = frontmost_reader
         self._clock = clock
         self._prev: tuple[str | None, ...] | None = None
+        self._debounce = view.DepartureDebouncer()
 
     @property
     def config_path(self) -> Path:
@@ -100,6 +101,7 @@ class Dashboard:
             return from_daemon
         cfg, warnings = config_mod.load(self._config_path)
         convs, conv_diags = conversations.scan(self._mapping_dir)
+        convs = self._debounce.apply(convs, prev_slots=self._prev)
         proc_snapshot = processes.scan(self._sessions_dir)
         records = hooks.read_all(self._state_dir)
 

@@ -227,3 +227,42 @@ def test_snapshot_is_json_ready_and_versioned():
     assert snap["slots"][0]["color"] == PALETTE[AgentState.DONE]
     import json
     json.dumps(snap)
+
+
+def test_debouncer_holds_a_keyed_conversation_through_one_missed_scan():
+    """A transient unreadable mapping file must not move keys (spec §5: keys
+    move on lifecycle events only). One missed scan is indistinguishable from
+    a Desktop rewrite race, so departure needs two consecutive misses."""
+    a, b = conv("a" * 36), conv("b" * 36)
+    deb = view.DepartureDebouncer()
+
+    both = deb.apply((a, b), prev_slots=(a.local_id, b.local_id, None, None, None, None))
+    assert {c.local_id for c in both} == {a.local_id, b.local_id}
+
+    # scan race: `a` vanishes for one poll -- held with last-known data
+    held = deb.apply((b,), prev_slots=(a.local_id, b.local_id, None, None, None, None))
+    assert {c.local_id for c in held} == {a.local_id, b.local_id}
+
+    # second consecutive miss: now it really departs
+    gone = deb.apply((b,), prev_slots=(a.local_id, b.local_id, None, None, None, None))
+    assert {c.local_id for c in gone} == {b.local_id}
+
+
+def test_debouncer_reappearance_clears_the_miss_streak():
+    a, b = conv("a" * 36), conv("b" * 36)
+    deb = view.DepartureDebouncer()
+    slots = (a.local_id, b.local_id, None, None, None, None)
+    deb.apply((a, b), prev_slots=slots)
+    deb.apply((b,), prev_slots=slots)          # miss 1
+    deb.apply((a, b), prev_slots=slots)        # back -- streak resets
+    held = deb.apply((b,), prev_slots=slots)   # miss 1 again, still held
+    assert {c.local_id for c in held} == {a.local_id, b.local_id}
+
+
+def test_debouncer_ignores_conversations_that_hold_no_key():
+    a, b = conv("a" * 36), conv("b" * 36)
+    deb = view.DepartureDebouncer()
+    deb.apply((a, b), prev_slots=(a.local_id, None, None, None, None, None))
+    # `b` never had a key: its disappearance is not held
+    out = deb.apply((a,), prev_slots=(a.local_id, None, None, None, None, None))
+    assert {c.local_id for c in out} == {a.local_id}

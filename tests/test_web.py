@@ -209,3 +209,23 @@ def test_fresh_daemon_snapshot_wins_over_local_compute(tmp_path: Path):
     data = dash.data()
     assert data["source"] == "ui"
     assert data["device"]["connected"] is False
+
+
+def test_transient_unreadable_mapping_does_not_move_keys(tmp_path: Path):
+    """End to end: one corrupted poll must not shuffle key assignment."""
+    lid_a = _conversation(tmp_path / "mapping", str(uuid.uuid4()), "first")
+    lid_b = _conversation(tmp_path / "mapping", str(uuid.uuid4()), "second")
+    dash = _dashboard(tmp_path, clock=lambda: 1_700_000_060.0)
+    first = dash.data()
+    before = [s["local_id"] for s in first["slots"]]
+    assert before[0] is not None and before[1] is not None
+
+    target = tmp_path / "mapping" / "org" / "acct" / f"{before[0]}.json"
+    original = target.read_text()
+    target.write_text("{ half-written")          # Desktop rewrite race
+    during = [s["local_id"] for s in dash.data()["slots"]]
+    target.write_text(original)
+    after = [s["local_id"] for s in dash.data()["slots"]]
+
+    assert during == before
+    assert after == before
