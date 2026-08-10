@@ -26,6 +26,74 @@ RESULTS = frozenset({
 })
 
 
+class _LSOpener:
+    """Prewarmed in-process LaunchServices opener (Codex recommendation #1).
+
+    A warm LSOpenCFURLRef returns in ~0.2 ms versus ~1.4 ms just to spawn
+    /usr/bin/open (which itself exits ~70 ms later). The first lookup is
+    cold (~90 ms), so a worker thread binds and prewarms off the HID path
+    and every press afterwards is a queue put. Any failure permanently
+    falls back to the Popen path.
+    """
+
+    _ENCODING_UTF8 = 0x08000100
+
+    def __init__(self) -> None:
+        import queue
+        import threading
+        self._queue: "queue.SimpleQueue[str]" = queue.SimpleQueue()
+        self.broken = False
+        self._thread = threading.Thread(
+            target=self._run, name="semapad-lsopen", daemon=True)
+        self._thread.start()
+
+    def open(self, url: str) -> None:
+        self._queue.put(url)
+
+    def _run(self) -> None:
+        try:
+            import ctypes
+            import ctypes.util
+            cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+            cs = ctypes.CDLL(
+                "/System/Library/Frameworks/CoreServices.framework/CoreServices")
+            cf.CFURLCreateWithBytes.restype = ctypes.c_void_p
+            cf.CFURLCreateWithBytes.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long,
+                ctypes.c_uint32, ctypes.c_void_p]
+            cf.CFRelease.argtypes = [ctypes.c_void_p]
+            cs.LSOpenCFURLRef.restype = ctypes.c_int32
+            cs.LSOpenCFURLRef.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+            def make_url(text: str):
+                raw = text.encode()
+                return cf.CFURLCreateWithBytes(
+                    None, raw, len(raw), self._ENCODING_UTF8, None)
+
+            # Prewarm: build and release one URL so the cold path (~90 ms
+            # measured) happens here, not on the first key press.
+            warm = make_url("claude://claude.ai/epitaxy/prewarm")
+            if warm:
+                cf.CFRelease(warm)
+        except Exception:
+            self.broken = True
+            return
+        while True:
+            url = self._queue.get()
+            try:
+                ref = make_url(url)
+                if not ref:
+                    continue
+                try:
+                    cs.LSOpenCFURLRef(ref, None)
+                finally:
+                    cf.CFRelease(ref)
+            except Exception:
+                self.broken = True
+                return
+
+
+_ls_opener: _LSOpener | None = None
 _children: list = []   # fire-and-forget opens awaiting reaping
 
 
@@ -42,10 +110,17 @@ def open_local(local_id: str,
     and serialized rapid presses behind each other. The URL is validated
     before spawning, so a successful spawn is the success signal.
     """
+    global _ls_opener
     try:
         url = deeplink.url_for(local_id)
     except ValueError:
         return False
+    if spawner is subprocess.Popen:          # production path only
+        if _ls_opener is None:
+            _ls_opener = _LSOpener()
+        if not _ls_opener.broken:
+            _ls_opener.open(url)
+            return True
     _reap_children()
     try:
         child = spawner(["/usr/bin/open", url],

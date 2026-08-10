@@ -364,3 +364,29 @@ def test_snapshot_carries_the_package_version(tmp_path):
     daemon.tick(1.0)
     snap = json.loads((tmp_path / "runtime" / "snapshot.json").read_text())
     assert isinstance(snap["version"], str) and snap["version"]
+
+
+def test_async_scan_serves_cached_results_and_refreshes_off_thread(tmp_path):
+    """Codex rec #3: the 58 ms mapping scan must not run on the HID thread
+    every tick. With async_scan, ticks swap in the latest completed result."""
+    import time as time_mod
+
+    cli = str(uuid.uuid4())
+    _conversation(tmp_path / "mapping", cli, "first")
+    daemon = make_daemon(tmp_path, FakePad())
+    daemon.async_scan = True
+    daemon.tick(1.0)                     # first tick scans synchronously once
+    assert len(daemon._scan_result[0]) == 1
+
+    _conversation(tmp_path / "mapping", str(uuid.uuid4()), "second")
+    daemon._SCAN_INTERVAL_SECONDS = 0.0  # make the refresh due immediately
+    daemon.tick(2.0)                     # serves cache, kicks the worker
+    deadline = time_mod.time() + 5.0
+    while time_mod.time() < deadline:
+        with daemon._scan_lock:
+            if daemon._scan_result and len(daemon._scan_result[0]) == 2:
+                break
+        time_mod.sleep(0.02)
+    assert len(daemon._scan_result[0]) == 2   # worker delivered the refresh
+    daemon.tick(3.0)
+    assert sum(1 for c in daemon._scan_result[0]) == 2
