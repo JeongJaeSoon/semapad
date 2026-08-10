@@ -20,6 +20,12 @@ from semapad.model import Light
 #: We cannot read the pad's key colours back, so drift is invisible to us. A
 #: slow unconditional rewrite is what makes it heal on its own (#60).
 KEYS_REFRESH_SECONDS = 5.0
+#: On BLE every write consumes shared connection airtime (#49): the healing
+#: rewrite drops to a slow safety net and reclaims debounce behind the
+#: vendor's burst instead of racing it.
+BLE_KEYS_REFRESH_SECONDS = 60.0
+BLE_RECLAIM_MIN_SECONDS = 0.3
+BLE_RECLAIM_CAP_SECONDS = 1.0
 
 _UNSET = object()
 
@@ -39,8 +45,11 @@ def _ambient_value(light: Light) -> int | None | tuple[int, str]:
 class Compositor:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        self.ble = False   # set by the daemon from the pad transport
         self.keys_reclaim_due: float | None = None
         self.ambient_reclaim_due: float | None = None
+        self._keys_reclaim_start: float | None = None
+        self._ambient_reclaim_start: float | None = None
         self._last_keys: object = _UNSET
         self._last_ambient: object = _UNSET
         self._dirty_keys = True
@@ -71,14 +80,27 @@ class Compositor:
         causes: list[str] = []
         method = message.get("method")   # type: ignore[union-attr]
         delay = self.cfg.reclaim_delay_ms / 1000.0
+        if self.ble:
+            delay = max(delay, BLE_RECLAIM_MIN_SECONDS)
         if method in {"v.oai.rgbcfg", "lights.preview"}:
             if self.ambient_reclaim_due is None:
+                self._ambient_reclaim_start = now
                 self.ambient_reclaim_due = now + delay
                 causes.append("vendor_ambient")
+            elif self.ble and self._ambient_reclaim_start is not None:
+                # Trailing debounce: wait out the vendor's burst, capped.
+                self.ambient_reclaim_due = min(
+                    now + delay,
+                    self._ambient_reclaim_start + BLE_RECLAIM_CAP_SECONDS)
         elif method == "v.oai.thstatus" and owner == "claude" and layer_one:
             if self.keys_reclaim_due is None:
+                self._keys_reclaim_start = now
                 self.keys_reclaim_due = now + delay
                 causes.append("vendor_keys")
+            elif self.ble and self._keys_reclaim_start is not None:
+                self.keys_reclaim_due = min(
+                    now + delay,
+                    self._keys_reclaim_start + BLE_RECLAIM_CAP_SECONDS)
         return causes
 
     def paint(self, send: Callable[[dict], bool], now: float, *, owner: str,
@@ -101,7 +123,9 @@ class Compositor:
 
         if layer == 1:
             if now >= self._next_keys_refresh_due:
-                self._next_keys_refresh_due = now + KEYS_REFRESH_SECONDS
+                self._next_keys_refresh_due = now + (
+                    BLE_KEYS_REFRESH_SECONDS if self.ble
+                    else KEYS_REFRESH_SECONDS)
                 # §11.4: with idle_rewrite off, an unchanged board skips the
                 # unconditional rewrite so the vendor auto-dim can reach sleep.
                 if self.cfg.idle_rewrite == "on":

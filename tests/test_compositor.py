@@ -168,3 +168,26 @@ def test_close_flags_matrix():
     assert flags(owner="codex", verified_layer_one=True) == (False, True)
     assert flags(owner="none", verified_layer_one=True) == (False, True)
     assert flags(owner="claude", verified_layer_one=False) == (False, False)
+
+
+def test_ble_reclaim_debounces_behind_vendor_burst_with_cap():
+    c = comp()
+    c.ble = True
+    vendor = {"id": 1, "method": "v.oai.thstatus"}
+    c.note_message(vendor, 10.0, owner="claude", layer_one=True)
+    first_due = c.keys_reclaim_due
+    assert first_due == 10.3                 # BLE minimum 300 ms
+    c.note_message(vendor, 10.2, owner="claude", layer_one=True)
+    assert c.keys_reclaim_due == 10.5        # trailing edge extends
+    for t in (10.4, 10.6, 10.8, 10.95):
+        c.note_message(vendor, t, owner="claude", layer_one=True)
+    assert c.keys_reclaim_due == 11.0        # capped at start + 1 s
+
+
+def test_usb_reclaim_keeps_first_deadline():
+    c = comp()
+    vendor = {"id": 1, "method": "v.oai.thstatus"}
+    c.note_message(vendor, 10.0, owner="claude", layer_one=True)
+    due = c.keys_reclaim_due
+    c.note_message(vendor, 10.01, owner="claude", layer_one=True)
+    assert c.keys_reclaim_due == due

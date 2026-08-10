@@ -28,6 +28,10 @@ from semapad import protocol
 
 
 VID, PID, REPORT_ID = 0x303A, 0x8360, 6
+_ASYNC_WRITE_TIMEOUT_SECONDS = 3.0
+_KIO_UNSUPPORTED = 0xE00002C7
+#: Frames whose newest version fully supersedes a queued older one.
+_COALESCE_METHODS = frozenset({"v.oai.thstatus", "v.oai.rgbcfg"})
 VENDOR_ID, PRODUCT_ID = VID, PID
 
 _OUTPUT_REPORT = 1
@@ -142,6 +146,15 @@ class _PadBackend(Protocol):
     def set_report(self, device: Any, report_type: int,
                    report_id: int, packet: bytes) -> int: ...
 
+    # Optional: backends that can submit without blocking define
+    # ``supports_async_report = True`` and this method. ``on_done`` receives
+    # the IOReturn once the report has actually completed.
+    supports_async_report = False
+
+    def set_report_async(self, device: Any, report_type: int, report_id: int,
+                         packet: bytes,
+                         on_done: Callable[[int], None]) -> int: ...
+
     def pump(self, registration: _Registration, seconds: float) -> None: ...
 
     def unregister(self, device: Any, registration: _Registration) -> None: ...
@@ -245,6 +258,18 @@ class _IOKitBackend:
             ctypes.c_void_p, ctypes.c_int32, ctypes.c_long,
             ctypes.POINTER(ctypes.c_uint8), ctypes.c_long,
         ]
+        try:
+            iokit.IOHIDDeviceSetReportWithCallback.restype = ctypes.c_int32
+            iokit.IOHIDDeviceSetReportWithCallback.argtypes = [
+                ctypes.c_void_p, ctypes.c_int32, ctypes.c_long,
+                ctypes.POINTER(ctypes.c_uint8), ctypes.c_long,
+                ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p,
+            ]
+            self.supports_async_report = True
+        except AttributeError:
+            self.supports_async_report = False
+        self._pending_writes: set[int] = set()
+        self._pending_refs: dict[int, list] = {}
         # Callback arguments are c_void_p so a null callback can explicitly
         # unregister before unscheduling and releasing the Python CFUNCTYPE.
         iokit.IOHIDDeviceRegisterInputReportCallback.restype = None
@@ -440,6 +465,36 @@ class _IOKitBackend:
             raise
         return registration
 
+    def set_report_async(self, device: Any, report_type: int, report_id: int,
+                         packet: bytes,
+                         on_done: Callable[[int], None]) -> int:
+        """Submit one output report; ``on_done(result)`` fires from the run
+        loop when it completes. The buffer and the ctypes callback are
+        anchored in ``_pending_writes`` until then -- a mere closure cycle
+        could be garbage-collected before the device answers."""
+        buffer = (ctypes.c_uint8 * len(packet)).from_buffer_copy(bytes(packet))
+        anchor: list = []
+
+        @_REPORT_CALLBACK
+        def completed(_context, result, _sender, _report_type,
+                      _report_id, _report, _length):
+            try:
+                on_done(int(result))
+            finally:
+                self._pending_writes.discard(id(anchor))
+                self._pending_refs.pop(id(anchor), None)
+
+        anchor.extend((buffer, completed))
+        self._pending_writes.add(id(anchor))
+        self._pending_refs[id(anchor)] = anchor
+        result = int(self._iokit.IOHIDDeviceSetReportWithCallback(
+            device, report_type, report_id, buffer, len(packet),
+            _ASYNC_WRITE_TIMEOUT_SECONDS, completed, None))
+        if result != 0:
+            self._pending_writes.discard(id(anchor))
+            self._pending_refs.pop(id(anchor), None)
+        return result
+
     def set_report(self, device: Any, report_type: int,
                    report_id: int, packet: bytes) -> int:
         buffer = (ctypes.c_uint8 * len(packet)).from_buffer_copy(packet)
@@ -534,6 +589,14 @@ class Pad:
         self._firmware_version: str | None = None
         self.transport = ""
         self.epoch = 0
+        # BLE async writer (one report in flight, FIFO frames, newest
+        # thstatus/rgbcfg supersedes a queued-not-started one). ponytail:
+        # kIOReturnUnsupported flips _async_send_broken permanently and every
+        # later send takes the proven synchronous path.
+        self._write_frames: "deque[tuple[object, list[bytes]]]" = deque()
+        self._write_inflight: list[bytes] | None = None
+        self._write_index = 0
+        self._async_send_broken = False
 
         # Explicit aliases make the callback/buffer/run-loop lifetime visible
         # and ensure no temporary local is their only Python reference.
@@ -713,7 +776,25 @@ class Pad:
         """
         self._assert_owner_thread()
         self._ensure_writable()
+        use_async = (self.transport == protocol.BLE
+                     and not self._async_send_broken
+                     and getattr(self._backend, "supports_async_report", False))
         with self._send_lock:
+            if use_async:
+                # A synchronous BLE SetReport blocks ~30 ms per report and a
+                # press paint is ~7 reports: the pump starved for 200-2000 ms
+                # (measured, #49). Queue the frame and return; completions
+                # arriving on the run loop advance the queue.
+                packets = list(protocol.frame(message, self.transport))
+                method = message.get("m")
+                if method in _COALESCE_METHODS:
+                    self._write_frames = deque(
+                        frame for frame in self._write_frames
+                        if frame[0] != method)
+                self._write_frames.append((method, packets))
+                if self._write_inflight is None:
+                    self._advance_writer(raise_on_error=True)
+                return
             for packet in protocol.frame(message, self.transport):
                 try:
                     result = self._backend.set_report(
@@ -724,6 +805,50 @@ class Pad:
                 if result != 0:
                     self._invalidate_status()
                     raise PadIOError("IOHIDDeviceSetReport", result)
+
+    def _advance_writer(self, *, raise_on_error: bool) -> None:
+        """Submit the next queued report, if any. Runs on the owner thread --
+        either from ``send`` or from a completion delivered by the pump."""
+        while True:
+            if self._write_inflight is not None                     and self._write_index < len(self._write_inflight):
+                packet = self._write_inflight[self._write_index]
+                epoch = self.epoch
+                result = self._backend.set_report_async(
+                    self._device, _OUTPUT_REPORT, REPORT_ID, packet,
+                    lambda rc, _epoch=epoch: self._write_completed(_epoch, rc))
+                if result == 0:
+                    return
+                if result == _KIO_UNSUPPORTED:
+                    self._async_send_broken = True
+                self._drop_pending_writes()
+                self._invalidate_status()
+                error = PadIOError("IOHIDDeviceSetReportWithCallback", result)
+                if raise_on_error:
+                    raise error
+                self._callback_error = error
+                return
+            if not self._write_frames:
+                self._write_inflight = None
+                return
+            _method, packets = self._write_frames.popleft()
+            self._write_inflight, self._write_index = packets, 0
+
+    def _write_completed(self, epoch: int, result: int) -> None:
+        if self._closed or epoch != self.epoch or self._write_inflight is None:
+            return
+        if result != 0:
+            self._drop_pending_writes()
+            self._invalidate_status()
+            self._callback_error = PadIOError(
+                "IOHIDDeviceSetReportWithCallback", result)
+            return
+        self._write_index += 1
+        self._advance_writer(raise_on_error=False)
+
+    def _drop_pending_writes(self) -> None:
+        self._write_frames.clear()
+        self._write_inflight = None
+        self._write_index = 0
 
     def _drain_reports(self) -> None:
         while self._raw_reports:
@@ -939,6 +1064,7 @@ class Pad:
             self._connected = False
             self._closed = True
             self._invalidate_status()
+            self._drop_pending_writes()
             self._device = None
             self._clear_registration_references()
         return first_error
