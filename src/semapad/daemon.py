@@ -270,6 +270,24 @@ class Daemon:
             self._next_status_due = now + max(0.001,
                                               self.cfg.status_poll_ms / 1000.0)
 
+    def _apply_exclusive(self, now: float) -> None:
+        """Reopen the device seized while Claude owns it (spec: #41/#19).
+
+        ponytail: a full reconnect per ownership flip -- cheap enough (one
+        status roundtrip); revisit only if flip latency is ever felt.
+        """
+        current = self.pad
+        if current is None or not hasattr(current, "set_exclusive"):
+            return
+        desired = self.cfg.exclusive and self.owner == "claude"
+        if desired == current.exclusive_requested:
+            return
+        current.set_exclusive(desired)
+        self._log_event("exclusive", requested=desired, owner=self.owner)
+        self._invalidate_pad(reconnect=True, now=now)
+        self._next_retry_due = now          # flip immediately, no backoff
+        self._retry_seconds = 1.0
+
     def _ensure_pad(self, now: float) -> None:
         if self.pad is None:
             if now < self._next_retry_due:
@@ -456,6 +474,11 @@ class Daemon:
             "layer": self._verified_layer,
             "status_verified": self._verified_epoch is not None,
             "pad_error_code": self.pad_error_code,
+            "exclusive": (
+                "denied" if getattr(current, "exclusive_requested", False)
+                and getattr(current, "exclusive_denied", False)
+                else "on" if getattr(current, "exclusive_requested", False)
+                else "off"),
             "last_input_result": self.last_input_result,
             "last_input": self.last_input,
             "note": None,
@@ -488,6 +511,7 @@ class Daemon:
         self._reload_config()
         built = self._build_view(now)
         self._stage_ms["view"] = round((time_mod.perf_counter() - t0) * 1000, 1)
+        self._apply_exclusive(now)
         self._ensure_pad(now)
 
         if self.pad is not None and self._verified_epoch is not None:

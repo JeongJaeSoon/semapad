@@ -92,6 +92,20 @@ class FakePad:
         return [message["m"] for message in self.sent]
 
 
+class SeizablePad(FakePad):
+    def __init__(self) -> None:
+        super().__init__()
+        self._seize = False
+        self.exclusive_denied = False
+
+    def set_exclusive(self, flag: bool) -> None:
+        self._seize = bool(flag)
+
+    @property
+    def exclusive_requested(self) -> bool:
+        return self._seize
+
+
 def _conversation(mapping: Path, cli: str, title: str = "conv") -> str:
     local_id = f"local_{uuid.uuid4()}"
     directory = mapping / "org" / "acct"
@@ -409,3 +423,32 @@ def test_async_scan_serves_cached_results_and_refreshes_off_thread(tmp_path):
     assert len(daemon._scan_result[0]) == 2   # worker delivered the refresh
     daemon.tick(3.0)
     assert sum(1 for c in daemon._scan_result[0]) == 2
+
+
+def test_exclusive_mode_seizes_for_claude_and_releases_for_codex(tmp_path):
+    cli = str(uuid.uuid4())
+    _conversation(tmp_path / "mapping", cli)
+    pad = SeizablePad()
+    front = {"id": CLAUDE}
+    daemon = make_daemon(tmp_path, pad, cfg=Config(exclusive=True))
+    daemon._frontmost = lambda: front["id"]
+    daemon.tick(1.0)
+    daemon.tick(2.0)                     # flip applies on the tick after owner
+    assert pad.exclusive_requested       # Claude owns -> seized
+    reconnects = pad.reconnects
+    front["id"] = CODEX
+    daemon.tick(3.0)
+    daemon.tick(4.0)
+    assert not pad.exclusive_requested   # Codex owns -> shared again
+    assert pad.reconnects > reconnects   # each flip reopens the device
+
+
+def test_exclusive_off_never_touches_the_pad_mode(tmp_path):
+    cli = str(uuid.uuid4())
+    _conversation(tmp_path / "mapping", cli)
+    pad = SeizablePad()
+    daemon = make_daemon(tmp_path, pad)      # default config: exclusive off
+    daemon.tick(1.0)
+    daemon.tick(2.0)
+    assert not pad.exclusive_requested
+    assert pad.reconnects == 0

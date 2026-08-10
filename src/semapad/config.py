@@ -20,6 +20,7 @@ _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 @dataclass(frozen=True)
 class Config:
     gate_mode: str = "frontmost"
+    exclusive: bool = False
     yield_to: tuple[str, ...] = ("com.openai.codex",)
     own_when: tuple[str, ...] = ("com.anthropic.claudefordesktop",)
     colors: dict[AgentState, int] = field(default_factory=lambda: dict(PALETTE))
@@ -89,6 +90,14 @@ def _int(source: dict, key: str, default: int, label: str,
     return number
 
 
+def _bool(value, default: bool, label: str, warnings: list[str]) -> bool:
+    if value is None:
+        return default
+    if type(value) is bool:
+        return value
+    return _reject(value, default, label, warnings)
+
+
 def _strings(value, default: tuple[str, ...], label: str,
              warnings: list[str]) -> tuple[str, ...]:
     """A list of strings. A bare string would otherwise be shredded into characters."""
@@ -153,6 +162,7 @@ def load(path: Path | None) -> tuple[Config, list[str]]:
 
     return Config(
         gate_mode=_pick(gate.get("mode"), _GATE_MODES, "frontmost", "gate.mode", warnings),
+        exclusive=_bool(gate.get("exclusive"), False, "gate.exclusive", warnings),
         yield_to=_strings(gate.get("yield_to"), ("com.openai.codex",),
                           "gate.yield_to", warnings),
         own_when=_strings(gate.get("own_when"), ("com.anthropic.claudefordesktop",),
