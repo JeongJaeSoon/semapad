@@ -20,7 +20,9 @@ from semapad.sources import conversations, hooks, processes
 from semapad.web import edit
 
 DEFAULT_PORT = 8642
-_POLL_MS = 1500
+_POLL_MS = 1500          # fallback interval when long-polling errors out
+_LONGPOLL_TIMEOUT = 25.0  # one held request; the browser immediately re-arms
+_LONGPOLL_STEP = 0.05
 
 
 def _default_frontmost() -> str | None:
@@ -87,6 +89,18 @@ class Dashboard:
                 or now - generated_at > self.DAEMON_SNAPSHOT_FRESH_SECONDS:
             return None
         return snap
+
+    def snapshot_generation(self) -> float | None:
+        """Cheap read of the daemon snapshot's generated_at (no view build)."""
+        path = self._daemon_snapshot_path
+        if path is None:
+            return None
+        try:
+            snap = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        value = snap.get("generated_at")
+        return float(value) if isinstance(value, (int, float)) else None
 
     def data(self) -> dict:
         now = self._clock()
@@ -495,15 +509,23 @@ async function saveConfig(ev){
   return false;
 }
 
-async function tick(){
-  try {
-    const r = await fetch('/data'); render(await r.json());
-    document.getElementById('stale').textContent = '';
-  } catch (e) {
-    document.getElementById('stale').textContent = '연결 끊김';
+let SINCE = 0;
+async function loop(){
+  for (;;){
+    try {
+      const r = await fetch('/data?since=' + SINCE);
+      const d = await r.json();
+      SINCE = d.generated_at || 0;
+      render(d);
+      document.getElementById('stale').textContent = '';
+    } catch (e) {
+      document.getElementById('stale').textContent = '연결 끊김';
+      await new Promise(res => setTimeout(res, %POLL%));
+      SINCE = 0;
+    }
   }
 }
-tick(); setInterval(tick, %POLL%);
+loop();
 loadConfig();
 </script></body></html>
 """.replace("%POLL%", str(_POLL_MS))
@@ -517,7 +539,26 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             body = _PAGE.replace("%TOKEN%", self.csrf_token).encode()
             self._reply(200, "text/html; charset=utf-8", body)
-        elif self.path == "/data":
+        elif self.path == "/data" or self.path.startswith("/data?"):
+            since = None
+            if "since=" in self.path:
+                try:
+                    since = float(self.path.split("since=", 1)[1].split("&", 1)[0])
+                except ValueError:
+                    since = None
+            if since is not None:
+                # Hold the request until the daemon writes a newer snapshot.
+                # A key press is a material tick, so the press appears here
+                # within one daemon tick instead of one browser poll.
+                deadline = time.time() + _LONGPOLL_TIMEOUT
+                while time.time() < deadline:
+                    generation = self.dashboard.snapshot_generation()
+                    if generation is None:
+                        time.sleep(1.0)   # no daemon: behave like 1 s polling
+                        break
+                    if generation > since:
+                        break
+                    time.sleep(_LONGPOLL_STEP)
             body = json.dumps(self.dashboard.data()).encode()
             self._reply(200, "application/json", body)
         elif self.path == "/config":
