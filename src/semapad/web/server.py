@@ -91,8 +91,10 @@ class Dashboard:
     def data(self) -> dict:
         now = self._clock()
         from_daemon = self._daemon_snapshot(now)
+        import semapad as semapad_pkg
         if from_daemon is not None:
             from_daemon["source"] = "daemon"
+            from_daemon["ui_version"] = semapad_pkg.version()
             from_daemon["poll_ms"] = _POLL_MS
             # §5.1 banner: a fingerprint differing from the on-disk config
             # means the last save has not reached the daemon's tick yet.
@@ -140,6 +142,8 @@ class Dashboard:
         }
         snap["poll_ms"] = _POLL_MS
         snap["source"] = "ui"
+        snap["version"] = semapad_pkg.version()
+        snap["ui_version"] = semapad_pkg.version()
         snap["config_pending"] = False
         return snap
 
@@ -224,7 +228,8 @@ button { background:#111; color:#fff; border:0; border-radius:10px;
 #cfgmsg { margin-left:.8rem; }
 .cfgfoot { padding: .9rem 1.1rem; border-top:1px solid #f0efeb; }
 </style></head><body>
-<h1>semapad <small id="stale" class="warn"></small></h1>
+<h1>semapad <small id="ver" style="color:#8a8a86;font-weight:400"></small>
+<small id="stale" class="warn"></small></h1>
 
 <div class="card" id="device"></div>
 
@@ -362,6 +367,13 @@ function renderPad(d){
 }
 
 function render(d){
+  const ver = document.getElementById('ver');
+  if (d.version){
+    ver.textContent = 'v' + d.version;
+    if (d.ui_version && d.ui_version !== d.version)
+      ver.innerHTML = `v${esc(d.version)} <span class="warn">(화면은 v${esc(d.ui_version)} —
+        데몬과 버전이 다릅니다. semapad autostart install로 데몬을 재시작하세요)</span>`;
+  }
   if (SAVE_WATCH && !d.config_pending){
     SAVE_WATCH = false;
     const msg = document.getElementById('cfgmsg');
