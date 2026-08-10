@@ -227,11 +227,23 @@ def _cmd_hook(paths: Paths) -> int:
 
 
 def _cmd_daemon(paths: Paths) -> int:
+    import fcntl
     import signal
     import time
 
     from semapad import config as config_mod
     from semapad.daemon import Daemon
+
+    # One daemon per machine: launchd and a manual run must never coexist
+    # (three writers on one pad). The descriptor stays open for the lifetime
+    # of the process; the OS releases the lock on any kind of exit.
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = open(paths.runtime_dir / "daemon.lock", "w")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("semapad: daemon already running", file=sys.stderr)
+        return 1
 
     cfg, warnings = config_mod.load(paths.config_path)
     for warning in warnings:
@@ -284,6 +296,64 @@ def _cmd_ui(paths: Paths, port: int, open_browser: bool) -> int:
     return 0
 
 
+def _cmd_autostart(paths: Paths, action: str, stdout=None) -> int:
+    import subprocess
+
+    from semapad import launch_agent
+
+    stdout = sys.stdout if stdout is None else stdout
+    spec = launch_agent.build_spec(
+        command_prefix=(sys.executable, "-m", "semapad.cli"),
+        runtime_home=paths.home,
+        log_path=paths.home / "logs" / "daemon.log",
+        runtime_environment={"SEMAPAD_HOME": paths.home},
+        account_home=paths.home.parent,
+    )
+    controller = launch_agent.Controller(spec)
+    inspection = launch_agent.inspect_manifest(spec)
+
+    if action == "status":
+        loaded = controller.loaded() if inspection.status != "missing" else False
+        print(f"autostart   {inspection.status}"
+              + (" | loaded" if loaded else " | not loaded"), file=stdout)
+        return 0
+
+    if action == "install":
+        launch_agent.ensure_install_directories(spec)
+        launch_agent.validate_program(spec)
+        launch_agent.ensure_private_log(spec)
+        launch_agent.ensure_lock_directory(spec)
+        with launch_agent.InstallLock(spec):
+            launch_agent.atomic_write_manifest(spec)
+            try:
+                if controller.loaded():
+                    controller.bootout()
+            except launch_agent.LaunchAgentError:
+                pass
+            # A manually started daemon must hand over before launchd's
+            # instance starts, or the new one exits on the daemon lock.
+            subprocess.run(["/usr/bin/pkill", "-f", "semapad(\\.cli)? daemon"],
+                           check=False)
+            controller.bootstrap()
+        print("semapad: installed login autostart", file=stdout)
+        return 0
+
+    if action == "uninstall":
+        if inspection.status == "missing":
+            print("semapad: autostart not installed", file=stdout)
+            return 0
+        with launch_agent.InstallLock(spec):
+            try:
+                if controller.loaded():
+                    controller.bootout()
+            except launch_agent.LaunchAgentError:
+                pass
+            launch_agent.remove_manifest(spec, inspection)
+        print("semapad: uninstalled login autostart", file=stdout)
+        return 0
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="semapad")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -294,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("install-hooks",
                    help="install Claude hooks, claiming old paneglow entries")
     sub.add_parser("daemon", help="run the pad daemon in the foreground")
+    autostart = sub.add_parser("autostart", help="manage the login LaunchAgent")
+    autostart.add_argument("action", choices=["install", "uninstall", "status"])
 
     args = parser.parse_args(argv)
     paths = Paths.from_env()
@@ -301,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_hook(paths)
     if args.command == "daemon":
         return _cmd_daemon(paths)
+    if args.command == "autostart":
+        return _cmd_autostart(paths, args.action)
     if args.command == "install-hooks":
         return install_hooks(paths, sys.stdout, sys.stderr)
     if args.command == "ui":
