@@ -142,60 +142,111 @@ class Dashboard:
 
 _PAGE = """<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"><title>semapad</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-:root { color-scheme: dark; }
-body { font: 14px/1.5 -apple-system, sans-serif; background:#111; color:#ddd;
-       max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
-h1 { font-size: 1.3rem; } h2 { font-size: 1rem; margin: 1.4rem 0 .4rem;
-     color:#aaa; text-transform: uppercase; letter-spacing:.06em; }
-table { border-collapse: collapse; width: 100%; }
-td, th { padding: .3rem .5rem; border-bottom: 1px solid #2a2a2a; text-align: left; }
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
-.key { border: 1px solid #333; border-radius: .5rem; padding: .6rem;
-       min-height: 4.4rem; position: relative; }
-.key .sw { width: 1rem; height: 1rem; border-radius: 50%; display: inline-block;
-           vertical-align: -2px; margin-right: .4rem; border: 1px solid #444; }
-.key .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-          display: block; font-weight: 600; }
-.key small { color: #888; }
-.badge { background:#333; border-radius:.6rem; padding:0 .5rem; font-size:.8rem; }
-.warn { color: #ffb74d; } .err { color: #ff5252; } .ok { color:#69f0ae; }
-#alert.alert { color: #ffb74d; font-weight: 700; }
-.legend span.sw { width:.8rem; height:.8rem; display:inline-block;
-                  border-radius:50%; margin-right:.3rem; vertical-align:-1px;
-                  border:1px solid #444; }
-.legend li { display:inline-block; margin-right:1rem; }
-ul { padding-left: 1.1rem; }
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { font: 14px/1.5 -apple-system, "SF Pro Text", sans-serif; background:#fff;
+       color:#1a1a1a; max-width: 900px; margin: 2.2rem auto 4rem; padding: 0 1.2rem; }
+h1 { font-size: 1.45rem; font-weight: 650; margin: 0 0 1.2rem; }
+h2 { font-size: 1.05rem; font-weight: 650; margin: 2rem 0 .7rem;
+     display:flex; justify-content:space-between; align-items:baseline; }
+h2 small { font-weight: 400; color:#8a8a86; font-size:.82rem; }
+.card { background:#fff; border:1px solid #e7e6e2; border-radius:14px; }
+.row { display:flex; justify-content:space-between; align-items:center;
+       gap:1.2rem; padding: .85rem 1.1rem; }
+.row + .row { border-top:1px solid #f0efeb; }
+.row .lab { font-weight: 560; }
+.row .desc { color:#8a8a86; font-size:.82rem; margin-top:.1rem; max-width: 34rem; }
+.row .val { color:#1a1a1a; white-space:nowrap; }
+.ok { color:#1a9c53; } .warn { color:#c77d00; } .err { color:#d0342c; }
+.badge { background:#f1f0ec; border-radius:.6rem; padding:.05rem .5rem;
+         font-size:.78rem; color:#5a5a56; }
+
+/* ---- pad rendering (vendor-style) ---- */
+.padwrap { display:flex; justify-content:center; padding: 2.2rem 0; }
+.padbody { background:#edecE7; background:#edece7; border-radius:26px;
+           padding: 14px; display:grid; grid-template-columns:repeat(4, 76px);
+           grid-auto-rows:76px; gap:10px;
+           box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 28px rgba(0,0,0,.07); }
+.kc { background:#fafaf8; border-radius:16px; position:relative;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06);
+      display:flex; align-items:center; justify-content:center; }
+.kc.knob { border-radius:50%; margin:6px; background:
+           radial-gradient(circle at 35% 30%, #ffffff, #eceae4); }
+.kc.stick { background:#fafaf8; }
+.kc.stick::after { content:""; width:52px; height:52px; border-radius:50%;
+      background: radial-gradient(circle at 38% 32%, #3c3c3c, #111); }
+.kc.mini { border-radius:50%; margin:14px; background:
+           radial-gradient(circle at 35% 30%, #2e2e2e, #0c0c0c); }
+.kc.wide { grid-column: span 2; }
+.kc.cmd { color:#8f8e8a; font-size:1.05rem; }
+.kc .led { width:15px; height:15px; border-radius:50%; }
+.kc.agent.lit .led { border:1px solid rgba(0,0,0,.18); }
+.kc.agent { cursor: default; }
+.kc.agent.lit .led { box-shadow: 0 0 10px 2px var(--glow); }
+.kc.agent:hover { box-shadow: inset 0 0 0 2px #e8a33d, 0 1px 2px rgba(0,0,0,.06); }
+.tip { display:none; position:absolute; bottom: calc(100% + 10px); left:50%;
+       transform: translateX(-50%); min-width: 15rem; max-width: 19rem;
+       background:#fff; border:1px solid #e7e6e2; border-radius:12px;
+       box-shadow: 0 10px 30px rgba(0,0,0,.13); padding:.7rem .85rem;
+       z-index: 5; text-align:left; }
+.kc.agent:hover .tip { display:block; }
+.tip .tt { font-weight:600; display:-webkit-box; -webkit-line-clamp:2;
+           -webkit-box-orient:vertical; overflow:hidden; }
+.tip .ts { color:#6a6a66; font-size:.82rem; margin-top:.25rem;
+           display:flex; align-items:center; gap:.4rem; }
+.tip .dot, .legend .dot { width:.62rem; height:.62rem; border-radius:50%;
+           display:inline-block; border:1px solid rgba(0,0,0,.12); }
+
+table { border-collapse: collapse; width: 100%; font-size:.88rem; }
+td, th { padding: .55rem 1.1rem; border-top: 1px solid #f0efeb; text-align: left; }
+th { color:#8a8a86; font-weight:560; border-top:none; }
+.legend { list-style:none; margin:0; padding:.4rem 1.1rem .8rem; }
+.legend li { display:inline-flex; align-items:center; gap:.35rem;
+             margin: .25rem 1.1rem .25rem 0; }
+#alert { padding:.85rem 1.1rem; }
+#alert.alert { color:#c77d00; font-weight:650; }
+#diags ul { margin:.2rem 0 .6rem; padding: 0 1.1rem 0 2.2rem; }
+input, select, button { font: inherit; }
+input[type=text], input[type=number], select {
+  border:1px solid #d9d8d3; border-radius:9px; padding:.35rem .6rem; }
+input[type=color] { width:2.6rem; height:1.9rem; border:1px solid #d9d8d3;
+  border-radius:9px; padding:.1rem; background:#fff; }
+button { background:#111; color:#fff; border:0; border-radius:10px;
+         padding:.5rem 1.4rem; font-weight:600; cursor:pointer; }
+#cfgmsg { margin-left:.8rem; }
+.cfgfoot { padding: .9rem 1.1rem; border-top:1px solid #f0efeb; }
 </style></head><body>
 <h1>semapad <small id="stale" class="warn"></small></h1>
 
-<h2>A. 기기</h2>
-<div id="device"></div>
+<div class="card" id="device"></div>
 
-<h2>B. 6키 그리드</h2>
-<div class="grid" id="grid"></div>
+<h2>Layout <small>hover로 대화·상태 확인 · A키 6개만 semapad 소유</small></h2>
+<div class="card"><div class="padwrap"><div class="padbody" id="pad"></div></div></div>
 
-<h2>C. 전체 대화</h2>
-<table id="convs"><thead><tr>
+<h2>전체 대화 <small>사이드바와 같은 집합</small></h2>
+<div class="card"><table id="convs"><thead><tr>
 <th>키</th><th>제목</th><th>상태</th><th>이유</th><th>프로세스</th>
-<th>딥링크</th><th>마지막 활동</th></tr></thead><tbody></tbody></table>
+<th>딥링크</th><th>마지막 활동</th></tr></thead><tbody></tbody></table></div>
 
-<h2>D. 판정 근거</h2>
-<div id="alert"></div>
+<h2>판정 근거</h2>
+<div class="card"><div id="alert"></div>
 <ul class="legend" id="legend"></ul>
-<div id="diags"></div>
+<div id="diags"></div></div>
 
-<h2>E. 설정</h2>
-<form id="cfg" onsubmit="return saveConfig(event)">
-<table id="cfgrows"></table>
-<button type="submit">저장</button> <span id="cfgmsg"></span>
+<h2>설정 <small>저장 즉시 반영</small></h2>
+<form class="card" id="cfg" onsubmit="return saveConfig(event)">
+<div id="cfgrows"></div>
+<div class="cfgfoot"><button type="submit">저장</button> <span id="cfgmsg"></span></div>
 </form>
 
 <script>
 const TOKEN = "%TOKEN%";
 </script>
 <script>
-const HEX = c => c === null ? null : '#' + c.toString(16).padStart(6, '0');
+const HEX = c => c === null || c === undefined ? null
+                : '#' + c.toString(16).padStart(6, '0');
 const NAMES = {idle:'Idle', working:'Working', waiting:'Requires input',
                done:'Done', error:'Error'};
 const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰색',
@@ -204,48 +255,87 @@ const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰�
                  unread:'안 본 활동 있음 (unread 근사, 훅 불요)'};
 function esc(s){ const d=document.createElement('span'); d.textContent=s??'';
                  return d.innerHTML; }
-function sw(color){ return `<span class="sw" style="background:${color??'#000'}"></span>`; }
+function dot(color){ return `<span class="dot" style="background:${color??'#000'}"></span>`; }
 function ago(sec){ if(!sec) return '-'; const d=Date.now()/1000-sec;
   if(d<60) return Math.round(d)+'s 전'; if(d<3600) return Math.round(d/60)+'m 전';
   if(d<86400) return Math.round(d/3600)+'h 전'; return Math.round(d/86400)+'d 전'; }
 
-function render(d){
-  const dev = d.device;
-  const devLine = dev.note ? esc(dev.note) :
-    `패드 ${dev.connected ? '연결됨' : '연결 안 됨'}` +
-    (dev.transport ? ` · ${esc(dev.transport)}` : '') +
-    (dev.firmware ? ` · fw ${esc(dev.firmware)}` : '') +
-    (dev.layer !== null && dev.layer !== undefined ? ` · layer ${dev.layer}` : '') +
-    (dev.status_verified ? ' · status <span class="ok">OK</span>'
-                         : ' · status <span class="warn">미검증</span>') +
-    (dev.pad_error_code ? ` · <span class="err">${esc(dev.pad_error_code)}</span>` : '') +
-    (dev.last_input_result ? ` · 마지막 입력: ${esc(dev.last_input_result)}` : '');
-  document.getElementById('device').innerHTML =
-    `<p>[${d.source === 'daemon' ? '데몬 스냅샷' : 'ui 자체 계산'}]` +
-    (d.config_pending ? ' <span class="warn">설정 저장됨 — 데몬 반영 대기 중</span>' : '') +
-    `</p><p>${devLine}</p>
-     <p>frontmost: <code>${esc(d.frontmost.bundle_id ?? 'n/a')}</code>` +
-    (d.frontmost.owner ? ` → 소유권 <b>${esc(d.frontmost.owner)}</b>` : ' (소유권 규칙 불일치)') +
-    (d.frontmost.error ? ` <span class="err">${esc(d.frontmost.error)}</span>` : '') +
-    `</p><p>프로세스 ${d.processes.count}개` +
-    (d.processes.authoritative ? '' : ' <span class="warn">(비권위 스캔)</span>') + `</p>`;
+function deviceRow(lab, val, desc){
+  return `<div class="row"><div><div class="lab">${lab}</div>` +
+         (desc ? `<div class="desc">${desc}</div>` : '') +
+         `</div><div class="val">${val}</div></div>`;
+}
 
-  document.getElementById('grid').innerHTML = d.slots.map(s => {
-    if (!s.local_id) return `<div class="key" title="빈 키"><span class="t">
-      <span class="sw"></span>—</span><small>${REASONS.empty} · off</small></div>`;
-    const title = s.title || s.local_id.slice(0, 14) + '…';
-    const tip = `${title} · ${NAMES[s.state]??s.state} · ${REASONS[s.reason]??s.reason}`;
-    return `<div class="key" title="${esc(tip)}">
-      <span class="t">${sw(HEX(s.color))}${esc(title)}</span>
-      <small>${NAMES[s.state]??''} · ${REASONS[s.reason]??s.reason}
-      · ${s.process_alive ? '<span class=ok>live</span>' : 'dead'}
-      · ${s.deeplink_url ? '딥링크 OK' : '<span class=err>딥링크 불가</span>'}</small></div>`;
-  }).join('');
+function renderDevice(d){
+  const dev = d.device;
+  let rows = '';
+  if (dev.note){
+    rows += deviceRow('Connection', '<span class="warn">Phase 1</span>', esc(dev.note));
+  } else {
+    rows += deviceRow('Connection',
+      dev.connected ? '<span class="ok">Connected</span>'
+                    : '<span class="err">Not connected</span>',
+      dev.pad_error_code ? `오류: ${esc(dev.pad_error_code)}` : '');
+    rows += deviceRow('Transport · Firmware · Layer',
+      `${esc(dev.transport ?? '?')} · ${esc(dev.firmware ?? '?')} · L${dev.layer ?? '?'}` +
+      (dev.status_verified ? ' <span class="ok">verified</span>'
+                           : ' <span class="warn">미검증</span>'));
+    if (dev.last_input_result)
+      rows += deviceRow('마지막 키 입력', esc(dev.last_input_result));
+  }
+  rows += deviceRow('소유권',
+    (d.frontmost.owner ? `<b>${esc(d.frontmost.owner)}</b>` : '유지(규칙 불일치)'),
+    `frontmost: ${esc(d.frontmost.bundle_id ?? 'n/a')}` +
+    (d.frontmost.error ? ` — <span class="err">${esc(d.frontmost.error)}</span>` : ''));
+  rows += deviceRow('데이터 소스',
+    d.source === 'daemon' ? '데몬 스냅샷' : 'ui 자체 계산',
+    d.config_pending ? '<span class="warn">설정 저장됨 — 데몬 반영 대기 중</span>' : '');
+  rows += deviceRow('프로세스',
+    `${d.processes.count}개` +
+    (d.processes.authoritative ? '' : ' <span class="warn">(비권위 스캔)</span>'));
+  document.getElementById('device').innerHTML = rows;
+}
+
+// physical layout: knob, A1, A2, stick / A3..A6 / 4 command keys /
+// mini-knob, wide mic (span 2), face key — command zone is vendor territory.
+function agentKeycap(s){
+  if (!s || !s.local_id)
+    return `<div class="kc agent"><span class="led"></span>
+      <div class="tip"><div class="tt">빈 키</div>
+      <div class="ts">${dot(null)} Off — 세션 없음</div></div></div>`;
+  const color = HEX(s.color);
+  const title = s.title || s.local_id.slice(0, 18) + '…';
+  const lit = s.color !== null && s.color !== undefined;
+  return `<div class="kc agent ${lit ? 'lit' : ''}" style="--glow:${color??'transparent'}">
+    <span class="led" style="background:${color??'transparent'}"></span>
+    <div class="tip"><div class="tt">${esc(title)}</div>
+      <div class="ts">${dot(color)} ${NAMES[s.state]??s.state}
+        · ${REASONS[s.reason]??s.reason}</div>
+      <div class="ts">${s.process_alive ? '<span class=ok>프로세스 live</span>'
+                                        : '프로세스 없음'}
+        · ${s.deeplink_url ? '딥링크 OK' : '<span class=err>딥링크 불가</span>'}</div>
+    </div></div>`;
+}
+
+function renderPad(d){
+  const S = d.slots;
+  document.getElementById('pad').innerHTML =
+    `<div class="kc knob"></div>` + agentKeycap(S[0]) + agentKeycap(S[1]) +
+    `<div class="kc stick"></div>` +
+    agentKeycap(S[2]) + agentKeycap(S[3]) + agentKeycap(S[4]) + agentKeycap(S[5]) +
+    `<div class="kc cmd">✎</div><div class="kc cmd">⧉</div>` +
+    `<div class="kc cmd">⇄</div><div class="kc cmd">🗑</div>` +
+    `<div class="kc mini"></div><div class="kc cmd wide">🎙</div><div class="kc cmd">☺</div>`;
+}
+
+function render(d){
+  renderDevice(d);
+  renderPad(d);
 
   document.querySelector('#convs tbody').innerHTML = d.conversations.map(c =>
     `<tr><td>${c.key===null?'':'<span class=badge>A'+(c.key+1)+'</span>'}</td>
      <td>${esc(c.title || c.local_id.slice(0,20)+'…')}${c.pinned?' 📌':''}</td>
-     <td>${sw(HEX(d.palette[c.state]))}${NAMES[c.state]??c.state}</td>
+     <td>${dot(HEX(d.palette[c.state]))} ${NAMES[c.state]??c.state}</td>
      <td>${REASONS[c.reason]??c.reason}</td>
      <td>${c.process_alive?'<span class=ok>live</span>':'dead'}</td>
      <td>${c.deeplink_url?'OK':'<span class=err>불가</span>'}</td>
@@ -254,22 +344,21 @@ function render(d){
   const alertBox = document.getElementById('alert');
   alertBox.className = d.alert;
   alertBox.textContent = d.alert === 'alert'
-    ? '키에 오르지 못한 대화가 입력/오류 대기 중 (Phase 3: 테두리 blink)'
+    ? '키에 오르지 못한 대화가 입력/오류 대기 중 (테두리 blink)'
     : '숨은 알림 없음';
 
-  // legend colour cells copy their config snippet on click (spec §6 step B)
   document.getElementById('legend').innerHTML =
     Object.entries(d.palette).map(([s, c]) =>
       `<li style="cursor:pointer" title="클릭: config 조각 복사"
            onclick='copySnippet("${s}", "${HEX(c)}")'>
-       ${sw(HEX(c))}${NAMES[s]??s} – ${esc(s)}</li>`).join('') +
-    `<li><span class="sw" style="background:#000"></span>Off – 세션 없음</li>`;
+       ${dot(HEX(c))} ${NAMES[s]??s} – ${esc(s)}</li>`).join('') +
+    `<li>${dot('#000')} Off – 세션 없음</li>`;
 
   const issues = [...(d.diagnostics||[]), ...(d.config.warnings||[]),
                   ...(d.processes.diagnostics||[])];
   document.getElementById('diags').innerHTML = issues.length
     ? '<ul>' + issues.map(w => `<li class="warn">${esc(w)}</li>`).join('') + '</ul>'
-    : '<p class="ok">경고 없음</p>';
+    : '';
 }
 
 function copySnippet(state, hex){
@@ -287,7 +376,7 @@ function fieldInput(f){
   if (f.kind === 'int')
     return `<input type="number" min="0" id="${id}" value="${f.value}">`;
   return `<input type="text" id="${id}" value="${esc(f.value.join(', '))}"
-          size="40" placeholder="쉼표로 구분">`;   // strings
+          size="34" placeholder="쉼표로 구분">`;   // strings
 }
 
 let CFG_FIELDS = [];
@@ -295,8 +384,9 @@ async function loadConfig(){
   const r = await fetch('/config');
   CFG_FIELDS = (await r.json()).fields;
   document.getElementById('cfgrows').innerHTML = CFG_FIELDS.map(f =>
-    `<tr><td><code>${f.path}</code></td><td>${fieldInput(f)}</td>
-     <td class="err" id="e_${f.path.replaceAll('.', '_')}"></td></tr>`).join('');
+    `<div class="row"><div><div class="lab"><code>${f.path}</code></div>
+     <div class="desc err" id="e_${f.path.replaceAll('.', '_')}"></div></div>
+     <div class="val">${fieldInput(f)}</div></div>`).join('');
 }
 
 async function saveConfig(ev){
