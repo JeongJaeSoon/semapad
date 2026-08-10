@@ -354,7 +354,7 @@ def test_manifest_ancestor_chain_is_validated_without_following_links(
         launch_agent.ensure_lock_directory(spec)
 
 
-def test_controller_uses_exact_launchctl_argv_and_discards_output(tmp_path: Path):
+def test_controller_uses_exact_launchctl_argv_and_captures_stderr(tmp_path: Path):
     spec = make_spec(tmp_path)
     calls = []
 
@@ -377,7 +377,7 @@ def test_controller_uses_exact_launchctl_argv_and_discards_output(tmp_path: Path
     ]
     assert all(kwargs["stdin"] is subprocess.DEVNULL for _, kwargs in calls)
     assert all(kwargs["stdout"] is subprocess.DEVNULL for _, kwargs in calls)
-    assert all(kwargs["stderr"] is subprocess.DEVNULL for _, kwargs in calls)
+    assert all(kwargs["stderr"] is subprocess.PIPE for _, kwargs in calls)
     assert all("shell" not in kwargs for _, kwargs in calls)
 
 
@@ -480,3 +480,28 @@ def test_install_hardens_a_preexisting_0644_daemon_log(tmp_path):
     )
     launch_agent.ensure_private_log(spec)
     assert (os.lstat(log).st_mode & 0o777) == 0o600
+
+
+def test_bootstrap_error_carries_launchctl_stderr(tmp_path):
+    import subprocess as sp
+
+    from semapad import launch_agent
+
+    class Failed:
+        returncode = 5
+        stderr = b"Bootstrap failed: 5: Input/output error\n"
+
+    spec = launch_agent.build_spec(
+        command_prefix=(str(tmp_path / "venv" / "python"), "-m", "semapad.cli"),
+        runtime_home=tmp_path / ".semapad",
+        log_path=tmp_path / ".semapad" / "logs" / "daemon.log",
+        runtime_environment={"SEMAPAD_HOME": tmp_path / ".semapad"},
+        account_home=tmp_path,
+        uid=__import__("os").getuid(),
+    )
+    controller = launch_agent.Controller(spec, runner=lambda *a, **k: Failed())
+    try:
+        controller.bootstrap()
+        raise AssertionError("expected LaunchAgentError")
+    except launch_agent.LaunchAgentError as error:
+        assert "Input/output error" in str(error)
