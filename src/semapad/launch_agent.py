@@ -428,9 +428,18 @@ def ensure_private_log(spec: Spec) -> None:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != spec.uid \
-                or stat.S_IMODE(metadata.st_mode) != 0o600 \
                 or metadata.st_nlink != 1:
             raise LaunchAgentError("private daemon log is unsafe")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            # A manual `nohup ... >> daemon.log` creates this with the default
+            # umask. Same owned-inode rationale as the directories: tighten in
+            # place on the descriptor we already validated.
+            try:
+                os.fchmod(descriptor, 0o600)
+            except OSError as error:
+                raise LaunchAgentError("could not harden the daemon log") from error
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+                raise LaunchAgentError("private daemon log is unsafe")
     finally:
         os.close(descriptor)
 

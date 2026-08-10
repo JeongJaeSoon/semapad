@@ -452,3 +452,26 @@ def test_install_hardens_preexisting_0755_runtime_and_logs(tmp_path):
     launch_agent._ensure_runtime_directories(spec)
     for path in (home, home / "runtime", home / "logs"):
         assert (os.lstat(path).st_mode & 0o777) == 0o700
+
+
+def test_install_hardens_a_preexisting_0644_daemon_log(tmp_path):
+    """`nohup ... >> daemon.log` leaves an umask-mode log behind; install
+    tightens it on the validated descriptor instead of rejecting."""
+    import os
+
+    from semapad import launch_agent
+    home = tmp_path / ".semapad"
+    (home / "logs").mkdir(parents=True)
+    log = home / "logs" / "daemon.log"
+    log.write_text("old manual-run output\n")
+    os.chmod(log, 0o644)
+    spec = launch_agent.build_spec(
+        command_prefix=(str(tmp_path / "venv" / "python"), "-m", "semapad.cli"),
+        runtime_home=home,
+        log_path=log,
+        runtime_environment={"SEMAPAD_HOME": home},
+        account_home=tmp_path,
+        uid=os.getuid(),
+    )
+    launch_agent.ensure_private_log(spec)
+    assert (os.lstat(log).st_mode & 0o777) == 0o600
