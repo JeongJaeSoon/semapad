@@ -252,7 +252,9 @@ def test_opened_press_echoes_key_colour_on_border_then_restores(tmp_path):
     assert echo[0]["p"]["ambient"]["c"] == 0xFFFFFF   # pressed key's colour
     assert echo[0]["p"]["ambient"]["e"] == 1          # solid, not fault
     pad.sent.clear()
-    daemon.tick(2.5)                     # echo expired
+    daemon.tick(2.5)                     # fault window passed -- echo lives on
+    assert not [m for m in pad.sent if m["m"] == "v.oai.rgbcfg"]
+    daemon.tick(2.7)                     # echo expired (0.6s)
     restored = [m for m in pad.sent if m["m"] == "v.oai.rgbcfg"]
     assert restored[0]["p"]["ambient"]["c"] == 0xFF6D00   # owner border
 

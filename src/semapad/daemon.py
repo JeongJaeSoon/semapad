@@ -26,6 +26,7 @@ from semapad.surfaces import agent_keys, ambient
 _STATUS_TIMEOUT_SECONDS = 1.0
 _RETRY_MAX_SECONDS = 30.0
 _FEEDBACK_SECONDS = 0.3
+_PRESS_ECHO_SECONDS = 0.6   # long enough to survive the vendor's press-time overwrite
 _SNAPSHOT_INTERVAL_SECONDS = 1.0
 
 
@@ -398,14 +399,16 @@ class Daemon:
             # The pad lights the whole A-zone itself while a key is down (#60).
             self.compositor.mark_dirty(keys=True, ambient=False)
         flash = None
+        duration = _FEEDBACK_SECONDS
         if outcome.feedback:
             flash = Light(self.cfg.underglow_claude, self.cfg.effect_fault)
         elif outcome.result == "opened" and key_colour is not None:
             # Press echo: the border briefly takes the pressed key's colour.
             flash = Light(key_colour)
+            duration = _PRESS_ECHO_SECONDS
         if flash is not None:
             self._flash_light = flash
-            self._feedback_until = now + _FEEDBACK_SECONDS
+            self._feedback_until = now + duration
             self.compositor.mark_dirty(keys=False, ambient=True)
             self._cause("input_feedback")
         if True:
