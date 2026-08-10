@@ -944,11 +944,24 @@ class AsyncFakeBackend(FakeBackend):
         super().__init__(raw_transport)
         self.async_writes: list[tuple[bytes, object]] = []
         self.async_rc = 0
+        self.auto_complete = False   # complete synchronously inside submit
 
     def set_report_async(self, device, report_type, report_id, packet, on_done):
-        if self.async_rc == 0:
-            self.async_writes.append((bytes(packet), on_done))
-        return self.async_rc
+        if self.async_rc != 0:
+            return self.async_rc
+        if self.auto_complete:
+            for message in self._write_decoder.feed(bytes(packet)):
+                self.sent_messages.append(message)
+                if message.get("m") == "device.status" and self.auto_status:
+                    self.queue_message({
+                        "result": {"version": "test", "layer_index": 1},
+                        "id": message["id"],
+                        "method": "device.status",
+                    })
+            on_done(0)
+            return 0
+        self.async_writes.append((bytes(packet), on_done))
+        return 0
 
     def complete_next(self, result: int = 0) -> None:
         packet, on_done = self.async_writes.pop(0)
@@ -1015,3 +1028,26 @@ def test_usb_send_stays_synchronous_even_with_async_backend():
     device, backend = open_fake(AsyncFakeBackend(raw_transport="USB"))
     device.send(protocol.rgbcfg(ambient=None))
     assert backend.writes and backend.async_writes == []
+
+
+def test_ble_lost_completion_trips_watchdog_and_reconnect_recovers():
+    device, backend = open_fake(AsyncFakeBackend())
+    backend.auto_status = True
+    device.send(protocol.rgbcfg(ambient=None))       # submitted, never completed
+    backend.clock.advance(7.0)                       # > watchdog window
+    with pytest.raises(pad.PadError):
+        device.poll_received(0.0)
+    backend.async_writes.clear()
+    backend.auto_complete = True
+    assert device.reconnect(timeout=1.0)
+    device.send(protocol.rgbcfg(ambient=None))       # queue is fresh again
+    assert backend.sent_messages[-1]["m"] == "v.oai.rgbcfg"
+
+
+def test_ble_normal_completion_never_trips_watchdog():
+    device, backend = open_fake(AsyncFakeBackend())
+    device.send(protocol.rgbcfg(ambient=None))
+    while backend.async_writes:
+        backend.complete_next()
+    backend.clock.advance(60.0)
+    device.poll_received(0.0)                        # no error
