@@ -375,6 +375,8 @@ class Daemon:
         current = self.pad
         snap = view_module.snapshot(
             built, config_fingerprint=self._config_fingerprint, generated_at=now)
+        import semapad as semapad_pkg
+        snap["version"] = semapad_pkg.version()
         snap["device"] = {
             "phase": 3,
             "connected": bool(getattr(current, "connected", False)),

@@ -356,3 +356,11 @@ def test_press_records_last_input_and_event_log(tmp_path):
     assert inputs[-1]["result"] == "opened"
     assert inputs[-1]["local_id"] == lid
     assert "title" not in json.dumps(lines)   # ids only, never titles
+
+
+def test_snapshot_carries_the_package_version(tmp_path):
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    snap = json.loads((tmp_path / "runtime" / "snapshot.json").read_text())
+    assert isinstance(snap["version"], str) and snap["version"]
