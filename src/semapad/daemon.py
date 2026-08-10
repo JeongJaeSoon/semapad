@@ -533,7 +533,8 @@ class Daemon:
             self._stage_ms["snapshot"] = round(
                 (__import__("time").perf_counter() - _snap_t0) * 1000, 1)
         if self._had_input:
-            self._log_event("tick_stages", **self._stage_ms)
+            self._log_event("tick_stages", causes=list(self.causes),
+                            **self._stage_ms)
 
     def _send(self, message: dict, now: float) -> bool:
         current = self.pad
