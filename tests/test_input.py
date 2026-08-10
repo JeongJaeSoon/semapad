@@ -121,3 +121,21 @@ def test_open_local_builds_the_epitaxy_route_and_does_not_wait():
 
 def test_open_local_refuses_invalid_ids():
     assert input_module.open_local("not-a-local-id") is False
+
+
+def test_injected_spawner_bypasses_the_ls_worker():
+    """Tests and fallbacks use the Popen path; the LS worker is production-only
+    (keyed on the spawner being the real subprocess.Popen)."""
+    calls: list = []
+
+    class Child:
+        def poll(self):
+            return 0
+
+    def spawner(command, **kwargs):
+        calls.append(command)
+        return Child()
+
+    lid = "local_00000000-0000-4000-8000-000000000000"
+    assert input_module.open_local(lid, spawner=spawner)
+    assert calls and input_module._ls_opener is None

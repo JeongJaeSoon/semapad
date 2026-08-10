@@ -71,6 +71,13 @@ class Daemon:
         self.view: view_module.View | None = None
         self.last_input_result: str | None = None
         self.last_input: dict | None = None   # {key, result, at} for the ui
+        self.async_scan = False
+        self._SCAN_INTERVAL_SECONDS = 0.5
+        import threading as _threading
+        self._scan_lock = _threading.Lock()
+        self._scan_result = None
+        self._scan_started = None
+        self._scan_running = False
         self._events_path = (state_dir.parent / "logs" / "events.jsonl"
                              if state_dir is not None else None)
         self.pad_error_code: str | None = None
@@ -138,7 +145,7 @@ class Daemon:
     # --- sources -> view ----------------------------------------------------
 
     def _build_view(self, now: float) -> view_module.View:
-        convs, archived_ids, conv_diags = conversations.scan(self.mapping_dir)
+        convs, archived_ids, conv_diags = self._scan_conversations()
         snapshot = processes.scan(self.sessions_dir)
         live_ids = {session.session_id for session in snapshot.sessions}
         try:
@@ -303,6 +310,47 @@ class Daemon:
                 and getattr(current, "status_verified", False)
                 and self._verified_epoch == getattr(current, "epoch", None)
                 and self._verified_layer == 1)
+
+    def _scan_conversations(self):
+        """Cached, off-thread mapping scan (Codex recommendation #3).
+
+        The scan reads ~130 files and measured 58 ms median on real
+        hardware -- synchronously inside the HID owner thread it was the
+        largest controllable tail on press latency. With async_scan the
+        owner thread only swaps in the latest completed result; the scan
+        itself runs on a worker at most once per interval. Tests construct
+        the daemon without async_scan and keep fully synchronous behaviour.
+        """
+        if not self.async_scan:
+            return conversations.scan(self.mapping_dir)
+        import threading
+        import time as time_mod
+        now = time_mod.monotonic()
+        with self._scan_lock:
+            result = self._scan_result
+            due = (self._scan_started is None
+                   or (now - self._scan_started) >= self._SCAN_INTERVAL_SECONDS)
+            if due and not self._scan_running:
+                self._scan_running = True
+                self._scan_started = now
+                threading.Thread(target=self._scan_worker,
+                                 name="semapad-scan", daemon=True).start()
+        if result is None:
+            # First tick: nothing cached yet -- scan synchronously once.
+            result = conversations.scan(self.mapping_dir)
+            with self._scan_lock:
+                if self._scan_result is None:
+                    self._scan_result = result
+        return result
+
+    def _scan_worker(self) -> None:
+        try:
+            result = conversations.scan(self.mapping_dir)
+            with self._scan_lock:
+                self._scan_result = result
+        finally:
+            with self._scan_lock:
+                self._scan_running = False
 
     def _log_event(self, kind: str, **fields: object) -> None:
         """Append one analysis line; logging must never break the daemon.
