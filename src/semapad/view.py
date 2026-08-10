@@ -143,11 +143,19 @@ class DepartureDebouncer:
 
     def apply(self, conversations: tuple[Conversation, ...],
               *, prev_slots: tuple[str | None, ...] | None,
+              archived: frozenset[str] = frozenset(),
               ) -> tuple[Conversation, ...]:
         present = {c.local_id for c in conversations}
         out = list(conversations)
         for lid in (prev_slots or ()):
             if lid is None or lid in present:
+                continue
+            if lid in archived:
+                # Provable archive: the file read fine and says so. This is
+                # the one departure the user wants instant (spec §5) -- only
+                # the ambiguous missing-file case stays debounced.
+                self._misses.pop(lid, None)
+                self._cache.pop(lid, None)
                 continue
             streak = self._misses.get(lid, 0) + 1
             if streak < self.MAX_MISSES and lid in self._cache:

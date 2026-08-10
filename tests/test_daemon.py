@@ -118,8 +118,8 @@ def make_daemon(tmp_path: Path, pad: FakePad | None, *,
                 opener=None) -> Daemon:
     opens: list = []
 
-    def default_opener(local_id: str, *, foreground: bool) -> bool:
-        opens.append((local_id, foreground))
+    def default_opener(local_id: str) -> bool:
+        opens.append(local_id)
         return True
 
     daemon = Daemon(
@@ -159,7 +159,9 @@ def test_startup_verifies_status_then_paints_conversation_colour(tmp_path):
     assert ambient[0]["p"]["ambient"]["c"] == 0xFF6D00   # claude owns
 
 
-def test_key_press_single_tap_opens_background_and_repaints(tmp_path):
+def test_key_press_opens_immediately_and_repaints(tmp_path):
+    # The tap window is gone (2026-08-10 acceptance): claude:// raises Desktop
+    # itself, so every valid press opens at once -- no 350 ms lag.
     cli = str(uuid.uuid4())
     lid = _conversation(tmp_path / "mapping", cli)
     pad = FakePad()
@@ -168,25 +170,9 @@ def test_key_press_single_tap_opens_background_and_repaints(tmp_path):
     pad.sent.clear()
     pad.push(hid("AG00"))
     daemon.tick(2.0)
-    assert daemon.opens == []                       # window still open
+    assert daemon.opens == [lid]
+    assert daemon.last_input_result == "opened"
     assert "v.oai.thstatus" in pad.sent_methods()   # press repainted the keys
-    daemon.tick(2.5)
-    assert daemon.opens == [(lid, False)]           # background focus
-    assert daemon.last_input_result == "opened_background"
-
-
-def test_key_double_tap_opens_foreground(tmp_path):
-    cli = str(uuid.uuid4())
-    lid = _conversation(tmp_path / "mapping", cli)
-    pad = FakePad()
-    daemon = make_daemon(tmp_path, pad)
-    daemon.tick(1.0)
-    pad.push(hid("AG00"))
-    daemon.tick(2.0)
-    pad.push(hid("AG00"))
-    daemon.tick(2.2)
-    assert daemon.opens == [(lid, True)]
-    assert daemon.last_input_result == "opened_foreground"
 
 
 def test_codex_frontmost_yields_keys_and_ignores_input(tmp_path):

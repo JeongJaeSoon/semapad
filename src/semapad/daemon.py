@@ -135,7 +135,7 @@ class Daemon:
     # --- sources -> view ----------------------------------------------------
 
     def _build_view(self, now: float) -> view_module.View:
-        convs, conv_diags = conversations.scan(self.mapping_dir)
+        convs, archived_ids, conv_diags = conversations.scan(self.mapping_dir)
         snapshot = processes.scan(self.sessions_dir)
         live_ids = {session.session_id for session in snapshot.sessions}
         try:
@@ -146,7 +146,8 @@ class Daemon:
             pass
         records = hooks.read_all(self.state_dir)
 
-        convs = self._debounce.apply(convs, prev_slots=self._prev_slots)
+        convs = self._debounce.apply(convs, prev_slots=self._prev_slots,
+                                     archived=archived_ids)
         built = view_module.build(
             conversations=convs, live_cli_ids=live_ids, records=records,
             prev_slots=self._prev_slots, colors=self.cfg.colors,
@@ -309,7 +310,7 @@ class Daemon:
             self._feedback_until = now + _FEEDBACK_SECONDS
             self.compositor.mark_dirty(keys=False, ambient=True)
             self._cause("input_feedback")
-        if outcome.result != "pending":
+        if True:
             self.last_input_result = outcome.result
             self._cause("input")
 
@@ -396,9 +397,6 @@ class Daemon:
         else:
             self._refresh_owner()
 
-        flushed = self.router.flush(now)
-        if flushed is not None:
-            self._finish_input(flushed, now)
 
         if self._feedback_until is not None and now >= self._feedback_until:
             self._feedback_until = None
