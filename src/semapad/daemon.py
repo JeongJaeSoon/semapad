@@ -76,6 +76,7 @@ class Daemon:
         self.generation = 0
 
         self._prev_slots: tuple[str | None, ...] | None = None
+        self._debounce = view_module.DepartureDebouncer()
         self._feedback_until: float | None = None
         self._verified_epoch: int | None = None
         self._verified_layer: int | None = None
@@ -145,6 +146,7 @@ class Daemon:
             pass
         records = hooks.read_all(self.state_dir)
 
+        convs = self._debounce.apply(convs, prev_slots=self._prev_slots)
         built = view_module.build(
             conversations=convs, live_cli_ids=live_ids, records=records,
             prev_slots=self._prev_slots, colors=self.cfg.colors,

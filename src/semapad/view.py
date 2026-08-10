@@ -123,6 +123,52 @@ def assign(prev: tuple[str | None, ...] | None, selected: list[str],
     return tuple(slots)
 
 
+class DepartureDebouncer:
+    """Hold a keyed conversation through one missed scan (spec §5).
+
+    A Desktop mapping-file rewrite can race our poll: the file reads as
+    invalid for one scan, the conversation vanishes, compaction moves every
+    later key, and the reappearing conversation lands on a different key --
+    a sticky-contract violation observed on real hardware (2026-08-10).
+    Departure therefore requires two consecutive misses; provable archival
+    still departs, one poll later. Only conversations holding a key are held.
+    """
+
+    #: consecutive misses before a keyed conversation really departs
+    MAX_MISSES = 2
+
+    def __init__(self) -> None:
+        self._cache: dict[str, Conversation] = {}
+        self._misses: dict[str, int] = {}
+
+    def apply(self, conversations: tuple[Conversation, ...],
+              *, prev_slots: tuple[str | None, ...] | None,
+              ) -> tuple[Conversation, ...]:
+        present = {c.local_id for c in conversations}
+        out = list(conversations)
+        for lid in (prev_slots or ()):
+            if lid is None or lid in present:
+                continue
+            streak = self._misses.get(lid, 0) + 1
+            if streak < self.MAX_MISSES and lid in self._cache:
+                self._misses[lid] = streak
+                out.append(self._cache[lid])
+            else:
+                self._misses.pop(lid, None)
+                self._cache.pop(lid, None)
+        keyed = set(prev_slots or ()) | present
+        for c in conversations:
+            if c.local_id in keyed:
+                self._cache[c.local_id] = c
+            self._misses.pop(c.local_id, None)
+        # drop cache entries for conversations that no longer hold a key
+        for lid in list(self._cache):
+            if lid not in (prev_slots or ()) and lid not in present:
+                self._cache.pop(lid, None)
+                self._misses.pop(lid, None)
+        return tuple(out)
+
+
 def _url(local_id: str) -> str | None:
     try:
         return deeplink.url_for(local_id)
