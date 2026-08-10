@@ -304,6 +304,9 @@ class _IOKitBackend:
         except UnicodeDecodeError:
             return None
 
+    seize = False          # request exclusive access on the next acquire
+    seize_denied = False   # last acquire wanted exclusive but ran shared
+
     def acquire(self, vid: int, pid: int) -> _AcquiredDevice | None:
         """Open the first IOHIDDevice matching exactly VendorID/ProductID."""
         matching = self._iokit.IOServiceMatching(b"IOHIDDevice")
@@ -338,7 +341,14 @@ class _IOKitBackend:
 
                 try:
                     raw_transport = self._string_property(device, "Transport")
-                    opened = self._iokit.IOHIDDeviceOpen(device, 0)
+                    options = 1 if self.seize else 0   # kIOHIDOptionsTypeSeizeDevice
+                    opened = self._iokit.IOHIDDeviceOpen(device, options)
+                    self.seize_denied = False
+                    if opened != 0 and options:
+                        # Exclusive open refused (kIOReturnNotPrivileged without
+                        # an Input Monitoring grant) -- run shared, tell the ui.
+                        self.seize_denied = True
+                        opened = self._iokit.IOHIDDeviceOpen(device, 0)
                 except Exception:
                     self._cf.CFRelease(device)
                     raise
@@ -556,6 +566,18 @@ class Pad:
             instance._dispose_connection()
             raise
         return instance
+
+    def set_exclusive(self, flag: bool) -> None:
+        """Request (or drop) exclusive access on the next (re)connect."""
+        setattr(self._backend, "seize", bool(flag))
+
+    @property
+    def exclusive_requested(self) -> bool:
+        return bool(getattr(self._backend, "seize", False))
+
+    @property
+    def exclusive_denied(self) -> bool:
+        return bool(getattr(self._backend, "seize_denied", False))
 
     @property
     def connected(self) -> bool:

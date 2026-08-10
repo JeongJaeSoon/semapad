@@ -258,3 +258,14 @@ def test_slot_order_is_no_longer_a_setting(tmp_path: Path):
     cfg, warnings = load(p)
     assert not hasattr(cfg, "slots_order")
     assert warnings == []
+
+
+def test_gate_exclusive_parses_and_rejects_nonbool(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"gate": {"exclusive": True}}))
+    cfg, warnings = load(p)
+    assert cfg.exclusive is True and warnings == []
+    p.write_text(json.dumps({"gate": {"exclusive": "yes"}}))
+    cfg, warnings = load(p)
+    assert cfg.exclusive is False
+    assert any("gate.exclusive" in w for w in warnings)

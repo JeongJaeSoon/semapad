@@ -337,6 +337,12 @@ function renderDevice(d){
       '화면(semapad ui)을 다시 시작하면 맞춰집니다');
   if (d.config_pending)
     rows += deviceRow('<span class="warn">설정 반영 대기</span>', '저장됨 — 곧 적용됩니다');
+  if (dev.exclusive === 'on')
+    rows += deviceRow('배타 모드', 'Claude 소유 중 — 다른 앱의 패드 접근 차단됨');
+  if (dev.exclusive === 'denied')
+    rows += deviceRow('<span class="warn">배타 모드 권한 필요</span>',
+      '<span class="warn">공유 모드로 동작 중</span>',
+      '시스템 설정 > 개인정보 보호 및 보안 > 입력 모니터링에 semapad의 python을 추가하세요');
   const linked = d.conversations.filter(c => c.process_alive).length;
   rows += deviceRow('실행 중 세션',
     `대화와 연결 ${linked} / 전체 ${d.processes.count}` +
