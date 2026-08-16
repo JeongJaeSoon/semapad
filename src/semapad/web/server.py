@@ -572,7 +572,14 @@ class _Handler(BaseHTTPRequestHandler):
                     if generation > since:
                         break
                     time.sleep(_LONGPOLL_STEP)
-            body = json.dumps(self.dashboard.data()).encode()
+            payload = self.dashboard.data()
+            # The 전체 대화 table reads top-to-bottom as A1..A6, so order it by
+            # key here -- not in view.build, whose activity order is the sticky
+            # key contract the daemon shares. Keyless rows keep that tail
+            # (newest first), and the stable sort leaves it untouched.
+            payload["conversations"].sort(key=lambda c: (c["key"] is None,
+                                                         c["key"]))
+            body = json.dumps(payload).encode()
             self._reply(200, "application/json", body)
         elif self.path == "/config":
             cfg, _warnings = config_mod.load(self.dashboard.config_path)

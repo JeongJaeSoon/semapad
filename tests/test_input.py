@@ -21,6 +21,25 @@ def router(opened: list | None = None, ok: bool = True) -> KeyRouter:
     return KeyRouter(opener)
 
 
+# --- async open results ------------------------------------------------------
+
+def test_drain_open_failures_reports_then_empties():
+    """The press cannot wait for LaunchServices, so a failed open surfaces here
+    or nowhere -- and it must not be reported twice."""
+    input_module.note_open_failure("claude://x/local_a", -10814)
+    assert input_module.drain_open_failures() == [("claude://x/local_a", -10814)]
+    assert input_module.drain_open_failures() == []
+
+
+def test_drain_open_failures_is_bounded():
+    """A wedged LaunchServices must not turn one tick into thousands of lines."""
+    for index in range(40):
+        input_module.note_open_failure(f"claude://x/{index}", -1)
+    drained = input_module.drain_open_failures(limit=8)
+    assert len(drained) == 8
+    input_module.drain_open_failures(limit=100)   # leave the queue clean
+
+
 # --- parse -------------------------------------------------------------------
 
 def test_parse_non_input_messages_are_none():

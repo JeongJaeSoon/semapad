@@ -231,6 +231,42 @@ def test_transient_unreadable_mapping_does_not_move_keys(tmp_path: Path):
     assert after == before
 
 
+def test_served_conversations_are_ordered_by_key(tmp_path: Path):
+    """The 전체 대화 table reads A1, A2, A3...; keyless rows keep the
+    newest-first tail view.build hands us."""
+    snapshot_path = tmp_path / "runtime" / "snapshot.json"
+    snapshot_path.parent.mkdir(parents=True)
+    # as view.build emits it: newest activity first, keys scrambled
+    rows = [("c3", 2, 300.0), ("c1", 0, 250.0), ("c5", 4, 200.0),
+            ("new", None, 190.0), ("c2", 1, 180.0), ("old", None, 150.0)]
+    snapshot_path.write_text(json.dumps({
+        "schema": 1, "generated_at": 1_700_000_058.0,
+        "config_fingerprint": "x", "alert": "normal", "palette": {},
+        "diagnostics": [], "slots": [],
+        "conversations": [{"local_id": lid, "key": key, "title": lid,
+                           "state": "idle", "reason": "no_process",
+                           "process_alive": False, "last_activity_at": at,
+                           "pinned": False, "deeplink_url": None}
+                          for lid, key, at in rows],
+        "device": {}, "frontmost": {},
+        "processes": {"count": 0, "authoritative": True, "diagnostics": []},
+        "config": {"warnings": []},
+    }))
+    dash = _dashboard(tmp_path, daemon_snapshot_path=snapshot_path,
+                      clock=lambda: 1_700_000_060.0)
+    server = make_server(dash, port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/data") as response:
+            served = json.loads(response.read())["conversations"]
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert [c["local_id"] for c in served] == ["c1", "c2", "c3", "c5",
+                                               "new", "old"]
+
+
 def test_data_long_poll_returns_when_the_snapshot_advances(tmp_path: Path):
     """/data?since=N holds until the daemon writes a newer snapshot, so a key
     press reaches the page within one daemon tick, not one browser poll."""

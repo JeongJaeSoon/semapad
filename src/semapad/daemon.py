@@ -105,6 +105,8 @@ class Daemon:
                                       "diagnostics": []}
         self._next_snapshot_due = 0.0
         self._view_fingerprint: object = None
+        self._outage_started_at: float | None = None
+        self._outage_code: str | None = None
 
     @property
     def verified_layer(self) -> int | None:
@@ -114,11 +116,25 @@ class Daemon:
         if value not in self._tick_causes:
             self._tick_causes.append(value)
 
-    def _set_pad_error(self, code: str | None, *, clear_status: bool = False) -> None:
+    def _set_pad_error(self, code: str | None, *, clear_status: bool = False,
+                       now: float | None = None) -> None:
         changed = code != self.pad_error_code
         if code != self.pad_error_code:
             self._log_event("pad_error", code=code,
                             transport=getattr(self.pad, "transport", None))
+            # A press during an outage never reaches the pad's queue, so it
+            # leaves no trace anywhere -- the window length is the only
+            # evidence it could have happened. Timed here because this is the
+            # one choke point every entry and exit flows through.
+            if self.pad_error_code is None:
+                self._outage_started_at = now
+                self._outage_code = code
+            elif code is None and self._outage_started_at is not None:
+                self._log_event(
+                    "outage", code=self._outage_code,
+                    seconds=(round(now - self._outage_started_at, 1)
+                             if now is not None else None))
+                self._outage_started_at = None
         self.pad_error_code = code
         if clear_status and self.last_status_at is not None:
             self.last_status_at = None
@@ -214,7 +230,7 @@ class Daemon:
         self._verified_epoch = self._verified_layer = None
         self.compositor.invalidate()
         if error_code is not None:
-            self._set_pad_error(error_code, clear_status=clear_status)
+            self._set_pad_error(error_code, clear_status=clear_status, now=now)
         if reconnect:
             self._needs_reconnect = True
             self._next_retry_due = max(self._next_retry_due,
@@ -232,19 +248,32 @@ class Daemon:
         if type(epoch) is not int or epoch < 1 \
                 or type(layer) is not int or layer < 1:
             return False
-        try:
-            current.discard_hid_inputs()
-        except Exception:
-            return False
+        # Only a real boundary -- a new connection epoch, a layer change, or a
+        # first verification -- leaves queued input that was made under a layer
+        # we cannot vouch for. The routine 1 s poll is not one of those: the
+        # press it finds was made under the layer already verified, and
+        # dropping it silently ate ~2.4% of presses on a healthy pad (#60 lesson
+        # applied too widely, measured 2026-08-17).
+        boundary = (epoch != old_epoch or layer != old_layer
+                    or old_layer is None)
+        if boundary:
+            try:
+                dropped = current.discard_hid_inputs()
+            except Exception:
+                return False
+            if dropped:
+                # The one input loss we can actually count.
+                self._log_event("input_dropped", count=dropped,
+                                transport=getattr(current, "transport", None))
         self._verified_epoch, self._verified_layer = epoch, layer
         self.last_status_at = now
-        self._set_pad_error(None)
+        self._set_pad_error(None, now=now)
         self._cause("status")
         self._next_status_due = now + self._status_poll_seconds()
         self._needs_reconnect = False
         self._retry_seconds = 1.0
         self._next_retry_due = now
-        if epoch != old_epoch or layer != old_layer or old_layer is None:
+        if boundary:
             self.compositor.invalidate()
             if epoch != old_epoch:
                 self._cause("epoch")
@@ -306,7 +335,7 @@ class Daemon:
             except Exception:
                 self.pad = None
             if self.pad is None:
-                self._set_pad_error("unavailable", clear_status=True)
+                self._set_pad_error("unavailable", clear_status=True, now=now)
                 self._next_retry_due = now + self._retry_seconds
                 self._retry_seconds = min(_RETRY_MAX_SECONDS,
                                           self._retry_seconds * 2)
@@ -318,7 +347,7 @@ class Daemon:
         if self._needs_reconnect or not getattr(current, "connected", False):
             if now < self._next_retry_due:
                 if not self._needs_reconnect:
-                    self._set_pad_error("disconnected", clear_status=True)
+                    self._set_pad_error("disconnected", clear_status=True, now=now)
                 return
             old_epoch, old_layer = self._verified_epoch, self._verified_layer
             try:
@@ -575,6 +604,12 @@ class Daemon:
             self._write_snapshot(built, now)
             self._stage_ms["snapshot"] = round(
                 (__import__("time").perf_counter() - _snap_t0) * 1000, 1)
+        # An open that failed after dispatch has no press left to attach to,
+        # so it gets its own line rather than silently contradicting "opened".
+        for url, status in input_module.drain_open_failures():
+            self._log_event("open_failed_async", status=status,
+                            local_id=url.rsplit("/", 1)[-1])
+
         if self._had_input:
             self._log_event("tick_stages", causes=list(self.causes),
                             transport=getattr(self.pad, "transport", None),
