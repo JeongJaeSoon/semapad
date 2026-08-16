@@ -10,9 +10,11 @@ history.
 """
 from __future__ import annotations
 
+import queue
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from semapad import deeplink
 
@@ -85,7 +87,9 @@ class _LSOpener:
                 if not ref:
                     continue
                 try:
-                    cs.LSOpenCFURLRef(ref, None)
+                    status = cs.LSOpenCFURLRef(ref, None)
+                    if status != 0:      # noErr; anything else opened nothing
+                        note_open_failure(url, status)
                 finally:
                     cf.CFRelease(ref)
             except Exception:
@@ -94,11 +98,45 @@ class _LSOpener:
 
 
 _ls_opener: _LSOpener | None = None
-_children: list = []   # fire-and-forget opens awaiting reaping
+_children: list[tuple[Any, str]] = []   # fire-and-forget opens awaiting reaping
+
+#: Opens are fire-and-forget, so a press is dispatched long before macOS says
+#: whether it worked. The verdict arrives later, on another thread, and would
+#: otherwise be dropped -- leaving "opened" unfalsifiable and a dead key
+#: invisible in the log. Failures land here; the daemon drains them per tick.
+_open_failures: "queue.SimpleQueue[tuple[str, int]]" = queue.SimpleQueue()
+
+
+def note_open_failure(url: str, status: int) -> None:
+    _open_failures.put((url, int(status)))
+
+
+def drain_open_failures(limit: int = 8) -> list[tuple[str, int]]:
+    """Take up to *limit* pending failures. Bounded: a wedged LaunchServices
+    must not turn one tick into thousands of log lines."""
+    out: list[tuple[str, int]] = []
+    while len(out) < limit:
+        try:
+            out.append(_open_failures.get_nowait())
+        except queue.Empty:
+            break
+    return out
 
 
 def _reap_children() -> None:
-    _children[:] = [child for child in _children if child.poll() is None]
+    """Reap finished opens, recording the ones that failed.
+
+    ``/usr/bin/open`` exits non-zero when nothing handles the URL -- the same
+    silent failure as a bad OSStatus on the LaunchServices path.
+    """
+    still_running = []
+    for child, url in _children:
+        code = child.poll()
+        if code is None:
+            still_running.append((child, url))
+        elif code != 0:
+            note_open_failure(url, code)
+    _children[:] = still_running
 
 
 def open_local(local_id: str,
@@ -129,7 +167,7 @@ def open_local(local_id: str,
                         stderr=subprocess.DEVNULL)
     except OSError:
         return False
-    _children.append(child)
+    _children.append((child, url))
     return True
 
 

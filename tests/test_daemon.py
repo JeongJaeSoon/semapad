@@ -47,6 +47,7 @@ class FakePad:
         self.sent: list[dict] = []
         self.closes: list[tuple[bool, bool]] = []
         self.reconnects = 0
+        self.drops_on_verify = 0
 
     def status(self, timeout: float = 3.0):
         self.status_verified = False
@@ -71,7 +72,8 @@ class FakePad:
         return messages
 
     def discard_hid_inputs(self) -> int:
-        return 0
+        dropped, self.drops_on_verify = self.drops_on_verify, 0
+        return dropped
 
     def send(self, message: dict) -> None:
         if self.send_fails:
@@ -391,6 +393,85 @@ def test_press_records_last_input_and_event_log(tmp_path):
     assert inputs[-1]["result"] == "opened"
     assert inputs[-1]["local_id"] == lid
     assert "title" not in json.dumps(lines)   # ids only, never titles
+
+
+def test_async_open_failures_reach_the_event_log(tmp_path):
+    """`opened` only means dispatched -- the real LaunchServices verdict lands
+    later, on another thread. Without this the daemon logs 100% success while
+    key presses quietly do nothing (observed 2026-08-17)."""
+    from semapad import input as input_module
+
+    input_module.drain_open_failures(limit=100)   # ignore other tests' leftovers
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    input_module.note_open_failure("claude://claude.ai/epitaxy/local_x", -10814)
+    daemon.tick(2.0)
+
+    lines = [json.loads(l) for l in
+             (tmp_path / "logs" / "events.jsonl").read_text().splitlines()]
+    failures = [l for l in lines if l["event"] == "open_failed_async"]
+    assert len(failures) == 1
+    assert failures[0]["status"] == -10814
+    assert failures[0]["local_id"] == "local_x"    # the url is not an id
+
+
+def _events(tmp_path: Path, kind: str) -> list[dict]:
+    path = tmp_path / "logs" / "events.jsonl"
+    if not path.exists():
+        return []
+    return [line for line in
+            (json.loads(l) for l in path.read_text().splitlines())
+            if line["event"] == kind]
+
+
+def test_presses_discarded_at_a_status_boundary_are_counted(tmp_path):
+    """The daemon drops HID queued across a verification boundary. That count is
+    the only direct measure of presses lost to a reconnect -- it was thrown
+    away, so the log claimed a clean recovery every time."""
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    assert _events(tmp_path, "input_dropped") == []   # quiet when nothing dropped
+
+    pad.drops_on_verify = 3
+    daemon._invalidate_pad(reconnect=True, now=2.0, error_code="send_failed")
+    daemon.tick(10.0)
+
+    (dropped,) = _events(tmp_path, "input_dropped")
+    assert dropped["count"] == 3
+
+
+def test_routine_reverification_keeps_the_presses_it_finds(tmp_path):
+    """The 1 s status poll is not a boundary. Epoch and layer are unchanged, so
+    a press queued across it was made under a layer we already knew and must
+    survive -- discarding it ate ~2.4% of presses on real hardware (2026-08-17)
+    while the pad was healthy and connected."""
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)                      # first verify: old_layer is None
+    assert pad.drops_on_verify == 0
+
+    pad.drops_on_verify = 2               # presses waiting when the poll lands
+    daemon.tick(3.0)                      # status_poll_ms=1000 -> re-verify due
+
+    assert daemon.last_status_at == 3.0   # the re-verification really happened
+    assert pad.drops_on_verify == 2       # ...and never touched the queue
+    assert _events(tmp_path, "input_dropped") == []
+
+
+def test_an_outage_logs_how_long_the_pad_was_deaf(tmp_path):
+    """Presses during the outage never reach the pad's queue at all, so the
+    window length is the only evidence they existed."""
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    daemon.tick(1.0)
+    daemon._invalidate_pad(reconnect=True, now=2.0, error_code="send_failed")
+    daemon.tick(10.0)
+
+    (outage,) = _events(tmp_path, "outage")
+    assert outage["seconds"] == 8.0
+    assert outage["code"] == "send_failed"
 
 
 def test_snapshot_carries_the_package_version(tmp_path):
