@@ -154,6 +154,51 @@ def prune(root: Path, live_ids: set[str] | None,
     return removed
 
 
+def health(settings_path: Path) -> tuple[str, ...]:
+    """Diagnose hooks that are installed but cannot start.
+
+    A hook that fails to launch is silent by design -- Claude must never be
+    interrupted by our failure -- so a stale interpreter path turns every
+    session white with nothing to read anywhere (observed 2026-08-17: a
+    ``brew upgrade`` deleted the Cellar path the hooks named). Absent hooks
+    are NOT a fault: the pad works without them (spec §4 principle 4), so
+    only an installed-but-unrunnable command is reported, once per path.
+
+    Never raises: diagnosing a problem must not become one.
+    """
+    import shlex
+
+    try:
+        raw = json.loads(settings_path.read_text())
+        events = raw["hooks"]
+    except Exception:
+        return ()
+    if not isinstance(events, dict):
+        return ()
+
+    broken: list[str] = []
+    for entries in events.values():
+        if not isinstance(entries, list):
+            continue
+        for matcher in entries:
+            hooks_list = matcher.get("hooks") if isinstance(matcher, dict) else None
+            for entry in hooks_list if isinstance(hooks_list, list) else ():
+                command = entry.get("command") if isinstance(entry, dict) else None
+                if not isinstance(command, str) or "semapad.cli" not in command:
+                    continue
+                try:
+                    interpreter = shlex.split(command)[0]
+                except (ValueError, IndexError):
+                    continue
+                if not os.access(interpreter, os.X_OK) \
+                        and interpreter not in broken:
+                    broken.append(interpreter)
+    return tuple(
+        f"훅이 설치돼 있지만 실행할 수 없습니다: {path} "
+        f"— `semapad install-hooks`로 다시 설치하세요 (그때까지 모든 키가 흰색)"
+        for path in broken)
+
+
 # --- hook classification (ported hook.py, store.* calls now module-local) ---
 
 _WORKING_EVENTS = frozenset(

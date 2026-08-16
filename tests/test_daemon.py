@@ -131,6 +131,7 @@ def _process(sessions: Path, cli: str) -> None:
 def make_daemon(tmp_path: Path, pad: FakePad | None, *,
                 cfg: Config | None = None,
                 frontmost: str | None = CLAUDE,
+                claude_settings: Path | None = None,
                 opener=None) -> Daemon:
     opens: list = []
 
@@ -149,6 +150,7 @@ def make_daemon(tmp_path: Path, pad: FakePad | None, *,
         pad_factory=lambda: pad,
         opener=opener or default_opener,
         frontmost=lambda: frontmost,
+        claude_settings=claude_settings,
     )
     daemon.opens = opens   # test convenience
     return daemon
@@ -472,6 +474,35 @@ def test_an_outage_logs_how_long_the_pad_was_deaf(tmp_path):
     (outage,) = _events(tmp_path, "outage")
     assert outage["seconds"] == 8.0
     assert outage["code"] == "send_failed"
+
+
+def test_broken_hooks_reach_the_dashboard_diagnostics(tmp_path):
+    """The failure that cost a night: hooks installed, interpreter gone, every
+    key white, and nothing anywhere said so."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command",
+         "command": f"{tmp_path}/gone/python -m semapad.cli hook"}]}]}}))
+    daemon = make_daemon(tmp_path, FakePad(), claude_settings=settings)
+    daemon.tick(1.0)
+
+    snap = json.loads((tmp_path / "runtime" / "snapshot.json").read_text())
+    assert any("install-hooks" in d for d in snap["diagnostics"])
+
+
+def test_healthy_hooks_add_no_diagnostic(tmp_path):
+    live = tmp_path / "python"
+    live.write_text("")
+    live.chmod(0o755)
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": f"{live} -m semapad.cli hook"}]}]}}))
+    daemon = make_daemon(tmp_path, FakePad(), claude_settings=settings)
+    daemon.tick(1.0)
+
+    snap = json.loads((tmp_path / "runtime" / "snapshot.json").read_text())
+    # other diagnostics (missing fixture dirs) are expected; no hook one is
+    assert not any("install-hooks" in d for d in snap["diagnostics"])
 
 
 def test_snapshot_carries_the_package_version(tmp_path):

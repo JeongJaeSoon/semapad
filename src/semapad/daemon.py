@@ -53,6 +53,7 @@ class Daemon:
                  pad_factory: Callable[[], object | None] = pad_module.Pad.open,
                  opener: Callable[..., bool] = input_module.open_local,
                  frontmost: Callable[[], str | None] = frontmost_module.bundle_id,
+                 claude_settings: Path | None = None,
                  ) -> None:
         self.cfg = cfg
         self.state_dir = state_dir
@@ -107,6 +108,9 @@ class Daemon:
         self._view_fingerprint: object = None
         self._outage_started_at: float | None = None
         self._outage_code: str | None = None
+        self._claude_settings = claude_settings
+        self._hook_health: tuple[str, ...] = ()
+        self._hook_health_stat: object = False   # never a stat signature
 
     @property
     def verified_layer(self) -> int | None:
@@ -164,6 +168,21 @@ class Daemon:
             self.compositor.set_config(cfg)
             self._cause("config")
 
+    def _check_hook_health(self) -> tuple[str, ...]:
+        """Re-diagnose only when settings.json changes -- the answer moves when
+        the file or the interpreter does, not every 250 ms tick."""
+        if self._claude_settings is None:
+            return ()
+        try:
+            stat = self._claude_settings.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        if signature != self._hook_health_stat:
+            self._hook_health_stat = signature
+            self._hook_health = hooks.health(self._claude_settings)
+        return self._hook_health
+
     # --- sources -> view ----------------------------------------------------
 
     def _build_view(self, now: float) -> view_module.View:
@@ -184,7 +203,8 @@ class Daemon:
             conversations=convs, live_cli_ids=live_ids, records=records,
             prev_slots=self._prev_slots, colors=self.cfg.colors,
             working_max_seconds=self.cfg.working_max_seconds, now=now,
-            diagnostics=conv_diags + snapshot.diagnostics,
+            diagnostics=conv_diags + snapshot.diagnostics
+            + self._check_hook_health(),
         )
         self._prev_slots = tuple(slot.local_id for slot in built.slots)
         self._slot_colors = tuple(slot.color for slot in built.slots)
