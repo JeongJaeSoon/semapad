@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -151,6 +152,7 @@ def make_daemon(tmp_path: Path, pad: FakePad | None, *,
         opener=opener or default_opener,
         frontmost=lambda: frontmost,
         claude_settings=claude_settings,
+        tasks_root=tmp_path / "tasks-root",   # hermetic: never scan real /tmp
     )
     daemon.opens = opens   # test convenience
     return daemon
@@ -325,6 +327,35 @@ def test_working_hook_colours_the_live_conversation(tmp_path):
     daemon.tick(2.0)
     thstatus = [m for m in pad.sent if m["m"] == "v.oai.thstatus"]
     assert thstatus[0]["p"][0]["c"] == 0x304FFE      # working blue
+
+
+def test_running_background_task_floors_done_to_working(tmp_path):
+    # #17: turn ended (Stop -> done record) but a background task keeps its
+    # output file open -- the key must be working blue, not done green.
+    from semapad.sources.hooks import SessionRecord, write
+
+    cli = str(uuid.uuid4())
+    _conversation(tmp_path / "mapping", cli)
+    _process(tmp_path / "sessions", cli)
+    write(SessionRecord(session_id=cli, cwd="", state=AgentState.DONE,
+                        rev=1, updated_at=1.0), tmp_path / "state")
+    tasks_dir = tmp_path / "tasks-root" / "-Users-x-proj" / cli / "tasks"
+    tasks_dir.mkdir(parents=True)
+    output = tasks_dir / "b1234567.output"
+    output.write_text("")
+    old = time.time() - 3600.0
+    os.utime(output, (old, old))     # only the held-open handle says "busy"
+
+    pad = FakePad()
+    daemon = make_daemon(tmp_path, pad)
+    with open(output, "a"):          # this process plays the task's shell
+        daemon.tick(2.0)
+    thstatus = [m for m in pad.sent if m["m"] == "v.oai.thstatus"]
+    assert thstatus[0]["p"][0]["c"] == 0x304FFE      # working blue
+    assert daemon.view.slots[0].reason == "bg_task"
+
+    daemon.tick(9.0)                 # handle closed, TTL expired, file lingers
+    assert daemon.view.slots[0].state == "done"
 
 
 def test_snapshot_written_with_device_and_finished_colours(tmp_path):

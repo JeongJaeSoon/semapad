@@ -40,6 +40,7 @@ def _dashboard(tmp_path: Path, **kwargs) -> Dashboard:
         config_path=tmp_path / "config.json",
         frontmost_reader=kwargs.pop("frontmost_reader",
                                     lambda: "com.anthropic.claudefordesktop"),
+        tasks_root=tmp_path / "tasks-root",   # hermetic: never scan real /tmp
         **kwargs,
     )
 
