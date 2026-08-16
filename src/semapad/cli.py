@@ -292,7 +292,8 @@ def _cmd_daemon(paths: Paths) -> int:
                     mapping_dir=paths.mapping_dir,
                     sessions_dir=paths.sessions_dir,
                     config_path=paths.config_path,
-                    snapshot_path=paths.snapshot_path)
+                    snapshot_path=paths.snapshot_path,
+                    claude_settings=paths.claude_settings)
     daemon.async_scan = True   # Codex rec #3: keep the 58 ms scan off the HID thread
     stop = {"flag": False}
 

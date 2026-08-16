@@ -263,3 +263,74 @@ def test_run_unexpected_processing_error_is_fail_closed(
     ) == 0
     assert store.read_all(tmp_path / "state") == []
     assert capsys.readouterr() == ("", "")
+
+
+# --- health (installed but unrunnable) ---------------------------------------
+
+def _settings(path: Path, command: str) -> Path:
+    path.write_text(json.dumps({
+        "hooks": {
+            "Stop": [{"hooks": [
+                {"type": "command", "command": "bash ~/.claude/hooks/auto-fmt.sh"},
+                {"type": "command", "command": command},
+            ]}],
+            "SessionStart": [{"hooks": [{"type": "command", "command": command}]}],
+        }
+    }))
+    return path
+
+
+def test_health_names_a_hook_interpreter_that_cannot_run(tmp_path: Path):
+    """Hooks fail open, so a stale interpreter is silent -- every session goes
+    white with nothing to read anywhere. This is the only place that says so."""
+    gone = tmp_path / "Cellar" / "semapad" / "0.1.0" / "bin" / "python"
+    settings = _settings(tmp_path / "settings.json",
+                         f"{gone} -m semapad.cli hook")
+
+    (diagnostic,) = hook.health(settings)
+    assert str(gone) in diagnostic
+    assert "install-hooks" in diagnostic
+
+
+def test_health_is_quiet_when_the_interpreter_runs(tmp_path: Path):
+    live = tmp_path / "python"
+    live.write_text("")
+    live.chmod(0o755)
+    settings = _settings(tmp_path / "settings.json",
+                         f"{live} -m semapad.cli hook")
+
+    assert hook.health(settings) == ()
+
+
+def test_health_ignores_absent_hooks_and_foreign_ones(tmp_path: Path):
+    """No hooks is a supported setup, not a fault (spec principle 4), and a
+    broken hook that is not ours is not ours to report."""
+    missing = tmp_path / "settings.json"
+    assert hook.health(missing) == ()
+
+    missing.write_text(json.dumps({"model": "opus"}))
+    assert hook.health(missing) == ()
+
+    missing.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "/nowhere/python -m otherpkg.cli hook"}]}]}}))
+    assert hook.health(missing) == ()
+
+
+def test_health_reports_each_broken_interpreter_once(tmp_path: Path):
+    """11 events share one command; the reader needs one line, not eleven."""
+    gone = tmp_path / "gone" / "python"
+    settings = _settings(tmp_path / "settings.json",
+                         f"{gone} -m semapad.cli hook")
+    assert len(hook.health(settings)) == 1
+
+
+def test_health_survives_a_malformed_settings_file(tmp_path: Path):
+    """Diagnosing a problem must never become one."""
+    bad = tmp_path / "settings.json"
+    bad.write_text("{broken")
+    assert hook.health(bad) == ()
+    bad.write_text(json.dumps({"hooks": {"Stop": "not-a-list"}}))
+    assert hook.health(bad) == ()
+    bad.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": ['not', 'a', 'string']}]}]}}))
+    assert hook.health(bad) == ()
