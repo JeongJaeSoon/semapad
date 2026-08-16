@@ -133,7 +133,9 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 # --- hook installation with paneglow migration (spec §10) --------------------
 
 def _hook_command() -> str:
-    return shlex.join((sys.executable, "-m", "semapad.cli", "hook"))
+    # Same reason as the LaunchAgent (#30): a Cellar path vanishes on upgrade,
+    # and a hook that cannot start fails open -- every session silently goes white.
+    return shlex.join((_stable_interpreter(), "-m", "semapad.cli", "hook"))
 
 
 def _is_owned_hook_command(value: object) -> bool:

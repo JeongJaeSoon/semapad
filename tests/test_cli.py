@@ -116,6 +116,26 @@ def test_hook_command_shape_matches_recognizer(tmp_path: Path):
         "/usr/bin/python -m otherpkg.cli hook")
 
 
+def test_hook_command_pins_the_brew_opt_path(tmp_path: Path, monkeypatch):
+    """A Cellar path dies on `brew upgrade` and the hook then fails silently --
+    every session goes white. Observed live 2026-08-17: hooks still pointed at
+    Cellar/semapad/0.1.0 while only 0.1.20 existed."""
+    import sys as sys_mod
+
+    cellar = tmp_path / "Cellar" / "semapad" / "0.1.20" / "libexec" / "bin"
+    opt = tmp_path / "opt" / "semapad" / "libexec" / "bin"
+    cellar.mkdir(parents=True)
+    opt.mkdir(parents=True)
+    (cellar / "python").write_text("")
+    (opt / "python").write_text("")
+    monkeypatch.setattr(sys_mod, "executable", str(cellar / "python"))
+
+    command = cli._hook_command()
+    assert command.startswith(str(opt / "python") + " ")
+    assert "/Cellar/" not in command
+    assert cli._is_owned_hook_command(command)
+
+
 def test_cmd_hook_writes_record(tmp_path: Path, monkeypatch):
     p = paths(tmp_path)
     event = {"hook_event_name": "Stop", "session_id": "abc", "cwd": "/w"}
