@@ -215,8 +215,7 @@ def build(*, conversations: Iterable[Conversation], live_cli_ids: set[str],
                                       last_focused_at=c.last_focused_at,
                                       now=now,
                                       working_max_seconds=working_max_seconds,
-                                      busy=(c.cli_session_id in busy_cli_ids
-                                            if c.cli_session_id else False))
+                                      busy=c.cli_session_id in busy_cli_ids)
         computed[c.local_id] = (c, state, reason, live)
 
     ranked = sorted(

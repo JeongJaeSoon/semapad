@@ -354,7 +354,7 @@ def test_running_background_task_floors_done_to_working(tmp_path):
     assert thstatus[0]["p"][0]["c"] == 0x304FFE      # working blue
     assert daemon.view.slots[0].reason == "bg_task"
 
-    daemon.tick(3.0)                 # handle closed, file still lingering
+    daemon.tick(9.0)                 # handle closed, TTL expired, file lingers
     assert daemon.view.slots[0].state == "done"
 
 

@@ -110,7 +110,9 @@ class Daemon:
         self._outage_started_at: float | None = None
         self._outage_code: str | None = None
         self._claude_settings = claude_settings
-        self._tasks_root = tasks_root
+        self._task_scanner = tasks.TaskScanner(root=tasks_root)
+        self._busy_ids: frozenset[str] = frozenset()
+        self._busy_wanted: set[str] = set()
         self._hook_health: tuple[str, ...] = ()
         self._hook_health_stat: object = False   # never a stat signature
 
@@ -198,10 +200,14 @@ class Daemon:
         except Exception:
             pass
         records = hooks.read_all(self.state_dir)
-        try:
-            busy_ids = tasks.scan(live_ids, now, root=self._tasks_root)
-        except Exception:
-            busy_ids = frozenset()   # detection is enrichment, never a fault
+        if self.async_scan:
+            # The handle check costs ~150 ms of kernel time per new file
+            # (same reasoning as the conversations scan, only worse): the
+            # HID owner thread reads the worker's latest result instead.
+            self._busy_wanted = live_ids
+            busy_ids = self._busy_ids
+        else:
+            busy_ids = self._task_scanner.scan(live_ids, now)
 
         convs = self._debounce.apply(convs, prev_slots=self._prev_slots,
                                      archived=archived_ids)
@@ -434,6 +440,10 @@ class Daemon:
             result = conversations.scan(self.mapping_dir)
             with self._scan_lock:
                 self._scan_result = result
+            import time as time_mod
+            busy = self._task_scanner.scan(self._busy_wanted, time_mod.time())
+            with self._scan_lock:
+                self._busy_ids = busy
         finally:
             with self._scan_lock:
                 self._scan_running = False

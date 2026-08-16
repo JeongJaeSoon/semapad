@@ -39,7 +39,8 @@ class Dashboard:
                  sessions_dir: Path, config_path: Path,
                  daemon_snapshot_path: Path | None = None,
                  frontmost_reader: Callable[[], str | None] = _default_frontmost,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 tasks_root: Path | None = None) -> None:
         self._state_dir = state_dir
         self._mapping_dir = mapping_dir
         self._sessions_dir = sessions_dir
@@ -49,6 +50,7 @@ class Dashboard:
         self._clock = clock
         self._prev: tuple[str | None, ...] | None = None
         self._debounce = view.DepartureDebouncer()
+        self._task_scanner = tasks.TaskScanner(root=tasks_root)
 
     @property
     def config_path(self) -> Path:
@@ -122,10 +124,7 @@ class Dashboard:
         proc_snapshot = processes.scan(self._sessions_dir)
         records = hooks.read_all(self._state_dir)
         live_ids = {s.session_id for s in proc_snapshot.sessions}
-        try:
-            busy_ids = tasks.scan(live_ids, now)
-        except Exception:
-            busy_ids = frozenset()   # detection is enrichment, never a fault
+        busy_ids = self._task_scanner.scan(live_ids, now)
 
         built = view.build(
             conversations=convs,
@@ -287,7 +286,8 @@ const RESULTS = {opened:'열림', open_failed:'열기 실패', empty_slot:'빈 �
 const REASONS = {empty:'빈 키', no_process:'프로세스 없음 → idle 흰색',
                  no_hook:'훅 신호 없음 → idle 흰색',
                  working_timeout:'working 시간 초과 → idle 강등', state:'훅 상태',
-                 unread:'안 본 활동 있음 (unread 근사, 훅 불요)'};
+                 unread:'안 본 활동 있음 (unread 근사, 훅 불요)',
+                 bg_task:'백그라운드 작업 실행 중'};
 function esc(s){ const d=document.createElement('span'); d.textContent=s??'';
                  return d.innerHTML; }
 function dot(color){ return `<span class="dot" style="background:${color??'#000'}"></span>`; }
