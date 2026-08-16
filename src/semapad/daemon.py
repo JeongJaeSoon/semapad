@@ -20,7 +20,7 @@ from semapad import view as view_module
 from semapad.compositor import Compositor
 from semapad.config import Config, load as load_config
 from semapad.model import OWNERS, Light
-from semapad.sources import conversations, hooks, processes
+from semapad.sources import conversations, hooks, processes, tasks
 from semapad.surfaces import agent_keys, ambient
 
 _STATUS_TIMEOUT_SECONDS = 1.0
@@ -54,6 +54,7 @@ class Daemon:
                  opener: Callable[..., bool] = input_module.open_local,
                  frontmost: Callable[[], str | None] = frontmost_module.bundle_id,
                  claude_settings: Path | None = None,
+                 tasks_root: Path | None = None,
                  ) -> None:
         self.cfg = cfg
         self.state_dir = state_dir
@@ -109,6 +110,7 @@ class Daemon:
         self._outage_started_at: float | None = None
         self._outage_code: str | None = None
         self._claude_settings = claude_settings
+        self._tasks_root = tasks_root
         self._hook_health: tuple[str, ...] = ()
         self._hook_health_stat: object = False   # never a stat signature
 
@@ -196,6 +198,10 @@ class Daemon:
         except Exception:
             pass
         records = hooks.read_all(self.state_dir)
+        try:
+            busy_ids = tasks.scan(live_ids, now, root=self._tasks_root)
+        except Exception:
+            busy_ids = frozenset()   # detection is enrichment, never a fault
 
         convs = self._debounce.apply(convs, prev_slots=self._prev_slots,
                                      archived=archived_ids)
@@ -205,6 +211,7 @@ class Daemon:
             working_max_seconds=self.cfg.working_max_seconds, now=now,
             diagnostics=conv_diags + snapshot.diagnostics
             + self._check_hook_health(),
+            busy_cli_ids=busy_ids,
         )
         self._prev_slots = tuple(slot.local_id for slot in built.slots)
         self._slot_colors = tuple(slot.color for slot in built.slots)

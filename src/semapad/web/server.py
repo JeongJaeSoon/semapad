@@ -16,7 +16,7 @@ from pathlib import Path
 
 from semapad import config as config_mod
 from semapad import frontmost, view
-from semapad.sources import conversations, hooks, processes
+from semapad.sources import conversations, hooks, processes, tasks
 from semapad.web import edit
 
 DEFAULT_PORT = 8642
@@ -121,16 +121,22 @@ class Dashboard:
                                      archived=archived_ids)
         proc_snapshot = processes.scan(self._sessions_dir)
         records = hooks.read_all(self._state_dir)
+        live_ids = {s.session_id for s in proc_snapshot.sessions}
+        try:
+            busy_ids = tasks.scan(live_ids, now)
+        except Exception:
+            busy_ids = frozenset()   # detection is enrichment, never a fault
 
         built = view.build(
             conversations=convs,
-            live_cli_ids={s.session_id for s in proc_snapshot.sessions},
+            live_cli_ids=live_ids,
             records=records,
             prev_slots=self._prev,
             colors=cfg.colors,
             working_max_seconds=cfg.working_max_seconds,
             now=now,
             diagnostics=conv_diags,
+            busy_cli_ids=busy_ids,
         )
         self._prev = tuple(s.local_id for s in built.slots)
 

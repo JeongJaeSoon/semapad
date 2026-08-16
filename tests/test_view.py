@@ -93,6 +93,72 @@ def test_live_process_without_hook_still_shows_unread():
     assert reason == "unread"
 
 
+# --- busy floor (#17: running background task, no hook signal) ---------------
+
+def test_busy_lifts_done_to_working():
+    # The reproduced case: turn ended (Stop -> done) but a background task
+    # keeps running -- Desktop says "1 running task", the key must be blue.
+    state, reason = view.display_state(
+        live=True, record=rec("c", AgentState.DONE),
+        last_activity_at=50.0, last_focused_at=60.0, now=100.0,
+        working_max_seconds=900, busy=True)
+    assert state is AgentState.WORKING
+    assert reason == "bg_task"
+
+
+def test_busy_lifts_hookless_idle_to_working():
+    # The originally reported case: resume left the record at idle while a
+    # background task was running.
+    state, reason = view.display_state(
+        live=True, record=None, last_activity_at=50.0, last_focused_at=60.0,
+        now=100.0, working_max_seconds=900, busy=True)
+    assert state is AgentState.WORKING
+    assert reason == "bg_task"
+
+
+def test_busy_survives_working_timeout():
+    # Ageing guards against a lost Stop; a held-open task file is positive
+    # evidence of work, so it re-floors the state.
+    state, reason = view.display_state(
+        live=True, record=rec("c", AgentState.WORKING, updated_at=100.0),
+        last_activity_at=50.0, last_focused_at=60.0,
+        now=1001.0, working_max_seconds=900, busy=True)
+    assert state is AgentState.WORKING
+    assert reason == "bg_task"
+
+
+def test_busy_never_hides_waiting_or_error():
+    for blocked in (AgentState.WAITING, AgentState.ERROR):
+        state, reason = view.display_state(
+            live=True, record=rec("c", blocked),
+            last_activity_at=50.0, last_focused_at=60.0, now=100.0,
+            working_max_seconds=900, busy=True)
+        assert state is blocked
+        assert reason == "state"
+
+
+def test_busy_without_live_process_stays_idle():
+    # An orphaned shell can outlive its session; a dead session is not working.
+    state, reason = view.display_state(
+        live=False, record=None, last_activity_at=50.0, last_focused_at=60.0,
+        now=100.0, working_max_seconds=900, busy=True)
+    assert state is AgentState.IDLE
+    assert reason == "no_process"
+
+
+def test_build_threads_busy_ids_to_display_state():
+    built = view.build(
+        conversations=[conv("a", cli="cli-a", focused=60.0)],
+        live_cli_ids={"cli-a"},
+        records=[rec("cli-a", AgentState.DONE)],
+        prev_slots=None, colors=PALETTE, working_max_seconds=900, now=100.0,
+        busy_cli_ids=frozenset({"cli-a"}))
+    slot = built.slots[0]
+    assert slot.state == "working"
+    assert slot.reason == "bg_task"
+    assert slot.color == PALETTE[AgentState.WORKING]
+
+
 # --- assign ------------------------------------------------------------------
 
 def test_startup_orders_by_activity_desc():

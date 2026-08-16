@@ -35,7 +35,7 @@ class SlotView:
     local_id: str | None
     title: str
     state: str | None          # display state value; None for an empty key
-    reason: str                # empty | no_process | no_hook | working_timeout | state
+    reason: str                # empty | no_process | no_hook | working_timeout | state | unread | bg_task
     color: int | None          # what the daemon will actually light; None = off
     process_alive: bool
     deeplink_url: str | None
@@ -65,7 +65,8 @@ class View:
 
 def display_state(*, live: bool, record: SessionRecord | None,
                   last_activity_at: float, last_focused_at: float, now: float,
-                  working_max_seconds: float) -> tuple[AgentState, str]:
+                  working_max_seconds: float, busy: bool = False,
+                  ) -> tuple[AgentState, str]:
     """The colour-deciding state of one conversation, with its reason.
 
     Hooks are an optional enrichment layer (spec §4 principle 4): with a live
@@ -75,17 +76,29 @@ def display_state(*, live: bool, record: SessionRecord | None,
     ``lastActivityAt > lastFocusedAt``) shows unseen activity as DONE green,
     the vendor's unread meaning. A conversation Desktop has never recorded a
     focus for stays idle rather than guessed unread (spec principle 5).
+
+    ``busy`` is #17's floor: background tasks fire no hooks, so a running one
+    lifts a live session's idle/done to WORKING -- including a WORKING record
+    that aged out, since a held-open task file is positive evidence of work.
+    It never touches waiting or error: those block the human and outrank a
+    machine that is merely busy.
     """
     if live and record is not None:
         if (record.state is AgentState.WORKING
                 and max(0.0, now - record.updated_at) >= working_max_seconds):
-            return AgentState.IDLE, "working_timeout"
-        return record.state, "state"
-    if 0.0 < last_focused_at < last_activity_at:
-        return AgentState.DONE, "unread"
-    if not live:
-        return AgentState.IDLE, "no_process"
-    return AgentState.IDLE, "no_hook"
+            state, reason = AgentState.IDLE, "working_timeout"
+        else:
+            state, reason = record.state, "state"
+    elif 0.0 < last_focused_at < last_activity_at:
+        state, reason = AgentState.DONE, "unread"
+    elif not live:
+        state, reason = AgentState.IDLE, "no_process"
+    else:
+        state, reason = AgentState.IDLE, "no_hook"
+
+    if busy and live and state in (AgentState.IDLE, AgentState.DONE):
+        return AgentState.WORKING, "bg_task"
+    return state, reason
 
 
 def assign(prev: tuple[str | None, ...] | None, selected: list[str],
@@ -188,7 +201,8 @@ def build(*, conversations: Iterable[Conversation], live_cli_ids: set[str],
           records: Iterable[SessionRecord],
           prev_slots: tuple[str | None, ...] | None,
           colors: Mapping[AgentState, int], working_max_seconds: float,
-          now: float, diagnostics: tuple[str, ...] = ()) -> View:
+          now: float, diagnostics: tuple[str, ...] = (),
+          busy_cli_ids: frozenset[str] = frozenset()) -> View:
     convs = sorted(conversations, key=lambda c: -c.last_activity_at)
     by_cli = {r.session_id: r for r in records}
 
@@ -200,7 +214,9 @@ def build(*, conversations: Iterable[Conversation], live_cli_ids: set[str],
                                       last_activity_at=c.last_activity_at,
                                       last_focused_at=c.last_focused_at,
                                       now=now,
-                                      working_max_seconds=working_max_seconds)
+                                      working_max_seconds=working_max_seconds,
+                                      busy=(c.cli_session_id in busy_cli_ids
+                                            if c.cli_session_id else False))
         computed[c.local_id] = (c, state, reason, live)
 
     ranked = sorted(
